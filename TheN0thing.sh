@@ -17,8 +17,8 @@ cat banner.txt
 printf "$reset"
 
 ### 
-WORDLISTS=/home/thenothing/TheN0thing/massdns/best-dns-wordlist.txt
-RESOLVERS=/home/thenothing/TheN0thing/wordlist/resolvers.txt
+WORDLISTS=best-dns-wordlist.txt
+RESOLVERS=resolvers.txt
 
 ### Helper
 if [ $# -eq 0 ]
