@@ -24,7 +24,7 @@ RESOLVERS=resolvers.txt
 if [ $# -eq 0 ]
   then
     printf "$red[!] Domain not found!$reset\n" 
-    printf "$yellow[i] Used: ./subdominex.sh example.com$reset\n"
+    printf "$yellow[i] Used: ./TheN0thing.sh example.com$reset\n"
     exit
 fi
 
