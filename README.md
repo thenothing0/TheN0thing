@@ -88,17 +88,19 @@ An ASN (e.g., AS15169)
 Options
 ```bash
 Options:
-  -o, --output DIR     Output directory (default: output/<target>)
-  -w, --wordlist FILE  Custom wordlist for bruteforce
-  -r, --resolvers FILE Custom resolvers file
-  -t, --threads NUM    Number of threads (default: 50)
-  -p, --ports PORTS    Ports to scan (default: common web ports)
-  -a, --all-ports      Use extended port list
-  -s, --screenshot     Take screenshots of discovered web services
-  -f, --fast           Fast mode - skip intensive operations
-  -v, --verbose        Verbose output
-  -h, --help           Show this help message and exit
-  --type TYPE          Specify target type (domain, ip, asn) - auto-detect if not specified
+-o, --output DIR     Output directory (default: output/<target>)
+-w, --wordlist FILE  Custom wordlist for bruteforce
+-r, --resolvers FILE Custom resolvers file
+-t, --threads NUM    Number of threads (default: $THREADS)
+-p, --ports PORTS    Ports to scan (default: common web ports)
+-a, --all-ports      Use extended port list
+-s, --screenshot     Take screenshots of discovered web services
+-f, --fast           Fast mode - skip intensive operations
+-v, --verbose        Verbose output
+-h, --help           Show this help message and exit
+--type TYPE          Specify target type (domain, ip, asn) - auto-detect if not specified
+--file FILE          Import targets from file (one target per line)
+--all-options        Enable all features (equivalent to -a -s + extended scans)
 ```
 Examples
 
