@@ -46,23 +46,22 @@ go install -v github.com/d3mondev/puredns/v2@latest
 go install -v github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest
 go install -v github.com/jaeles-project/gospider@latest
 go install -v github.com/projectdiscovery/asnmap/cmd/asnmap@latest
-
-
-
+```
 For other tools like findomain, sublist3r, and ipinfo, follow their respective installation instructions.
 Installation
 
-Clone the repository:
+1.Clone the repository:
 ```bash
 git clone https://github.com/yourusername/thenothing.git
 cd thenothing
-
-Make the script executable:
+```
+2.Make the script executable:
 ```bash
 chmod +x thenothing.sh
-
-(Optional) Create a configuration file for API keys:
+```
+3.(Optional) Create a configuration file for API keys:
 ```bash
+
 cat > ~/.subenum_config << EOF
 GITHUB_TOKEN="your_github_token"
 CHAOS_KEY="your_chaos_key"
@@ -73,19 +72,21 @@ CENSYS_API_SECRET="your_censys_secret"
 VIRUSTOTAL_API_KEY="your_virustotal_key"
 SPYSE_API_TOKEN="your_spyse_token"
 EOF
-
+```
 
 Usage
 Basic Usage
-./thenothing.sh [options] <target>
-Where <target> can be:
+```bash
 
+./thenothing.sh [options] <target>
+```
+Where <target> can be:
 A domain name (e.g., example.com)
 An IP address (e.g., 192.168.1.1)
 An IP range in CIDR notation (e.g., 192.168.1.0/24)
 An ASN (e.g., AS15169)
-
 Options
+```bash
 Options:
   -o, --output DIR     Output directory (default: output/<target>)
   -w, --wordlist FILE  Custom wordlist for bruteforce
@@ -98,29 +99,36 @@ Options:
   -v, --verbose        Verbose output
   -h, --help           Show this help message and exit
   --type TYPE          Specify target type (domain, ip, asn) - auto-detect if not specified
+```
 Examples
 
-Basic domain enumeration:
+1.Basic domain enumeration:
+```bash
 ./thenothing.sh example.com
-
-IP enumeration with screenshots:
+```
+2.IP enumeration with screenshots:
+```bash
 ./thenothing.sh -s 192.168.1.1
-
-ASN enumeration with custom output directory:
+```
+3.ASN enumeration with custom output directory:
+```bash
 ./thenothing.sh -o custom_output AS15169
-
-Fast domain enumeration with custom wordlist:
+```
+4.Fast domain enumeration with custom wordlist:
+```bash
 ./thenothing.sh -f -w path/to/wordlist.txt example.com
-
-Domain scan with extended port list:
+```
+5.Domain scan with extended port list:
+```bash
 ./thenothing.sh -a example.com
-
-IP range scan with more threads:
+```
+6.IP range scan with more threads:
+```bash
 ./thenothing.sh -t 100 192.168.1.0/24
-
-
+```
 Output Structure
 The tool organizes results in the following directory structure:
+```bash
 output/target/
 ├── assets/
 │   ├── asns/
@@ -153,11 +161,13 @@ output/target/
 │   ├── summary_report.html
 │   └── summary_report.md
 └── screenshots/
+```
 Reports
 TheN0thing generates two types of reports:
 
-Markdown Report (reports/summary_report.md): A simple text-based report with summary information.
-HTML Report (reports/summary_report.html): A more visually appealing report that can be opened in any web browser.
+1.Markdown Report (reports/summary_report.md): A simple text-based report with summary information.
+
+2.HTML Report (reports/summary_report.html): A more visually appealing report that can be opened in any web browser.
 
 Both reports include:
 
@@ -185,7 +195,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 Disclaimer
 TheN0thing is designed for legitimate security testing and reconnaissance purposes only. Always ensure you have proper authorization before scanning any systems or networks. Unauthorized scanning may violate laws and regulations.
 This README.md provides comprehensive information about "TheN0thing" tool, including:
-
+```bash
 1. An overview of its features
 2. Installation instructions for all prerequisites
 3. Configuration steps for API keys
@@ -194,5 +204,5 @@ This README.md provides comprehensive information about "TheN0thing" tool, inclu
 6. Information about the reports generated
 7. API integration details
 8. Contributing guidelines and disclaimers
-
 The documentation should help users understand how to properly install, configure, and use the tool for various reconnaissance tasks.
+```
