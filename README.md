@@ -46,7 +46,7 @@ go install -v github.com/d3mondev/puredns/v2@latest
 go install -v github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest
 go install -v github.com/jaeles-project/gospider@latest
 go install -v github.com/projectdiscovery/asnmap/cmd/asnmap@latest
-
+```bash
 
 
 
