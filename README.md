@@ -46,7 +46,6 @@ go install -v github.com/d3mondev/puredns/v2@latest
 go install -v github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest
 go install -v github.com/jaeles-project/gospider@latest
 go install -v github.com/projectdiscovery/asnmap/cmd/asnmap@latest
-```bash
 
 
 
@@ -54,13 +53,16 @@ For other tools like findomain, sublist3r, and ipinfo, follow their respective i
 Installation
 
 Clone the repository:
+```bash
 git clone https://github.com/yourusername/thenothing.git
 cd thenothing
 
 Make the script executable:
+```bash
 chmod +x thenothing.sh
 
 (Optional) Create a configuration file for API keys:
+```bash
 cat > ~/.subenum_config << EOF
 GITHUB_TOKEN="your_github_token"
 CHAOS_KEY="your_chaos_key"
