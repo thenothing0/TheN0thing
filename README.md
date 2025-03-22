@@ -194,8 +194,8 @@ License
 This project is licensed under the MIT License - see the LICENSE file for details.
 Disclaimer
 TheN0thing is designed for legitimate security testing and reconnaissance purposes only. Always ensure you have proper authorization before scanning any systems or networks. Unauthorized scanning may violate laws and regulations.
-This README.md provides comprehensive information about "TheN0thing" tool, including:
 ```bash
+This README.md provides comprehensive information about "TheN0thing" tool, including:
 1. An overview of its features
 2. Installation instructions for all prerequisites
 3. Configuration steps for API keys
