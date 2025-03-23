@@ -5,6 +5,7 @@ sudo apt update
 sudo apt install wget curl software-properties-common python3 python3-pip unzip jq -y
 sudo apt-get install -y parallel jq python3 python3-pip unzip
 pip3 install --break-system-packages shodan censys
+sudo npm install -g ipinfo-cli
 
 #go Tools install
 GO111MODULE=on go  install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
@@ -28,7 +29,7 @@ GO111MODULE=on go install github.com/tomnomnom/unfurl@latest
 git clone https://github.com/blechschmidt/massdns.git && cd massdns && make && sudo make install
 GO111MODULE=on go install github.com/d3mondev/puredns/v2@latest
 GO111MODULE=on go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
-
+GO111MODULE=on go install github.com/projectdiscovery/asnmap/cmd/asnmap@latest 
 
 #Installing Sublist3r
 pip3 install git+https://github.com/aboul3la/Sublist3r.git
