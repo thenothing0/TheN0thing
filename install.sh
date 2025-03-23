@@ -59,4 +59,5 @@ git clone https://github.com/trickest/resolvers.git
 
 # Downloading .gau.toml for gau
 wget https://raw.githubusercontent.com/lc/gau/master/.gau.toml
-
+sudo cp ~/go/bin/* /usr/local/bin
+sudo cp ~/go/bin/* /usr/bin
