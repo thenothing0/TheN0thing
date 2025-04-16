@@ -2,6 +2,7 @@
 # TheN0thing - Enhanced Enumeration Tool
 # Improved version with separation of IPs, ASNs, and subdomains
 # Added features: file import and all options mode
+# Modified: Removed Wayback Machine and VirusTotal integrations
 
 ### Colors
 yellow='\033[1;33m'
@@ -35,7 +36,6 @@ else
     SHODAN_KEY=${SHODAN_KEY:-""}
     CENSYS_API_ID=${CENSYS_API_ID:-""}
     CENSYS_API_SECRET=${CENSYS_API_SECRET:-""}
-    VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-""}
     SPYSE_API_TOKEN=${SPYSE_API_TOKEN:-""}
 fi
 # Kali Linux compatibility shim
@@ -414,45 +414,9 @@ fi
 
 rm -f "$tmp_crtsh"
 
+    # REMOVED: Wayback Machine check
 
-    
-    # Wayback Machine
-    log "INFO" "Checking Wayback Machine..."
-    curl -sk "http://web.archive.org/cdx/search/cdx?url=*.$domain&output=txt&fl=original&collapse=urlkey&page=" | awk -F / '{gsub(/:.*/, "", $3); print $3}' | sort -u > "$raw_dir/wayback.txt" &
-    
-    # Add retry logic for VirusTotal
-virustotal_scan() {
-    local domain="$1"
-    local raw_dir="$2"
-    local max_retries=3
-    local attempt=0
-    local retry_delay=5
-
-    [[ -z "$VIRUSTOTAL_API_KEY" ]] && return
-
-    while ((attempt++ < max_retries)); do
-        response=$(curl -fsS -m 20 \
-            -H "x-apikey: $VIRUSTOTAL_API_KEY" \
-            "https://www.virustotal.com/api/v3/domains/$domain/subdomains?limit=100" 2>/dev/null)
-        
-        if jq -e '.data' <<< "$response" &>/dev/null; then
-            jq -r '.data[].id' <<< "$response" > "$raw_dir/virustotal.txt"
-            return 0
-        fi
-        
-        sleep $retry_delay
-        retry_delay=$((retry_delay * 2))
-    done
-    
-    log "WARNING" "VirusTotal API failed after $max_retries attempts"
-    return 1
-}
-
-# Replace the original VirusTotal call with:
-if [[ -n "$VIRUSTOTAL_API_KEY" ]]; then
-    log "INFO" "Checking VirusTotal with retry logic..."
-    virustotal_scan
-fi
+    # REMOVED: VirusTotal scan
     
     if [[ -n "$GITHUB_TOKEN" ]]; then
         log "INFO" "Running GitHub subdomain scan..."
