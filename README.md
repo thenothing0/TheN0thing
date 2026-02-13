@@ -523,9 +523,9 @@ TheN0thing/
 ├── schedules/             # Scheduled scan configs
 └── locks/                 # Scan locks
 ```
-<div align="center">
-MIT License
+### MIT License
 
+<div align="center">
 Built for bug bounty hunters and security researchers.
 
 </div> ```
