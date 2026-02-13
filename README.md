@@ -524,6 +524,8 @@ TheN0thing/
 └── locks/                 # Scan locks
 ```
 <div align="center">
+MIT License
+
 Built for bug bounty hunters and security researchers.
 
 </div> ```
