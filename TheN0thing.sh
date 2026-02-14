@@ -746,7 +746,7 @@ send_notification() {
                 return 0
             }
             curl -fsS -X POST -H 'Content-type: application/json' \
-                --data-binary "@${payload_file}" "$NOTIFY_WEBHOOK" 2>/dev/null || true
+                --data-binary "@${payload_file}" "$NOTIFY_WEBHOOK" >/dev/null 2>/dev/null || true
             rm -f "$payload_file"
             ;;
         discord)
@@ -761,7 +761,7 @@ send_notification() {
                 return 0
             }
             curl -fsS -X POST -H 'Content-type: application/json' \
-                --data-binary "@${payload_file}" "$NOTIFY_WEBHOOK" 2>/dev/null || true
+                --data-binary "@${payload_file}" "$NOTIFY_WEBHOOK" >/dev/null 2>/dev/null || true
             rm -f "$payload_file"
             ;;
         telegram)
@@ -773,7 +773,7 @@ send_notification() {
             ( umask 077; printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$NOTIFY_BOT_TOKEN" > "$tg_cfg" )
             jq -n --arg cid "$NOTIFY_CHAT_ID" \
                   --arg txt "${safe_title}: ${safe_body}" \
-                  '{chat_id:$cid,text:$txt}' > "$tg_data" 2>/dev/null || {
+                  '{chat_id:$cid,text:$txt}' > "$tg_data" >/dev/null 2>/dev/null || {
                 rm -f "$tg_cfg" "$tg_data"
                 log "DEBUG" "[notify] Payload creation failed"
                 return 0
