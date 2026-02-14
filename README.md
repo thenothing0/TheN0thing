@@ -165,6 +165,17 @@ OTHER OPTIONS:
   --self-update             Update to latest version
   -h, --help                Show help
 ```
+## Profiles
+
+| Profile | Threads | Rate | Timeout | Use Case |
+|---------|---------|------|---------|----------|
+| `stealth` | 10 | 10 | 15s | Avoid detection |
+| `passive` | 50 | 50 | 10s | No active probing |
+| `default` | 100 | 150 | 5s | Balanced |
+| `bounty` | 200 | 300 | 5s | Bug bounty |
+| `aggressive` | 300 | 500 | 3s | Maximum speed |
+| `ci` | 50 | 100 | 5s | CI/CD pipeline |
+
 ### Examples
 ```
 ./TheN0thing.sh --profile stealth example.com
