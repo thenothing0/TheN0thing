@@ -262,6 +262,8 @@ CHAOS_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 SHODAN_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 CENSYS_API_ID=xxxxxxxx-xxxx-xxxx-xxxx
 CENSYS_API_SECRET=xxxxxxxxxxxxxxxx
+SECURITYTRAILS_KEY=xxxxxxxxxxxxxxxx
+SPYSE_API_TOKEN=xxxxxxxxxxxxxxxx
 ```
 ## Scope Files
 ### scope.txt
