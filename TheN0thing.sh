@@ -1541,9 +1541,12 @@ show_prog() {
     (( t <= 0 )) && return 0
     (( c < 0 )) && c=0; (( c > t )) && c=$t
     local tw; tw=$(_get_term_width)
-    local oh=$((${#lb} + ${#c} + ${#t} + 15)) w=$((tw - oh))
+    local oh=$(( ${#lb} + ${#c} + ${#t} + 15 ))
+    local w=$(( tw - oh ))
     (( w < 10 )) && w=10; (( w > 60 )) && w=60
-    local pc=$((c * 100 / t)) fl=$((w * c / t)) em=$((w - fl))
+    local pc=$((c * 100 / t)) 
+	local fl=$((w * c / t)) 
+	local em=$((w - fl))
     local bf="" be=""
     (( fl > 0 )) && { printf -v bf '%*s' "$fl" ''; bf="${bf// /=}"; }
     (( em > 0 )) && { printf -v be '%*s' "$em" ''; be="${be// /-}"; }
