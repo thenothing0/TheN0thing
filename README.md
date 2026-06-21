@@ -1,10 +1,10 @@
 
-### Advanced Reconnaissance Framework v8.8
+### Advanced Reconnaissance Framework v10.0
 
 [![Bash](https://img.shields.io/badge/Bash-4.4%2B-green?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey)](/)
-[![Version](https://img.shields.io/badge/Version-8.8-red)](/)
+[![Version](https://img.shields.io/badge/Version-10.0-red)](/)
 
 **Automated reconnaissance pipeline — from target to report in one command.**
 
@@ -26,13 +26,81 @@
 | Category | Capabilities |
 |----------|-------------|
 | **Subdomain Enumeration** | subfinder, amass, assetfinder, findomain, crt.sh, chaos, github-subdomains, rapiddns |
-| **DNS Resolution** | massdns, dnsx, puredns bruteforce |
+| **Passive Intel (v10)** | SecurityTrails, VirusTotal, Shodan, Censys, AlienVault OTX, Wayback Machine, SPF/DKIM/DMARC harvesting |
+| **Smart Active (v10)** | alterx-style permutation engine, recursive enumeration, wildcard-DNS filtering, VHost fuzzing |
+| **Protocol Exploitation (v10)** | AXFR zone transfer, DNSSEC/NSEC zone-walking (+NSEC3 detection), ENT awareness |
+| **AI Prediction (v10)** | optional local-LLM (ollama) subdomain prediction with DNS verification |
+| **DNS Resolution** | massdns (→ dig fallback), dnsx, puredns bruteforce |
 | **Port Scanning** | naabu, httpx fingerprinting |
 | **Web Analysis** | gospider crawling, WAF detection, technology fingerprinting |
 | **Vulnerability Scanning** | nuclei, subdomain takeover (subjack) |
-| **Cloud Detection** | AWS S3, Azure Blob, GCP Storage, CloudFront, Heroku, Netlify, Vercel |
+| **Cloud Detection** | AWS S3 / Azure Blob / GCP bucket discovery, CNAME-chain analysis, CloudFront, Heroku, Netlify, Vercel |
 | **Reporting** | Markdown, JSON, HTML with dark theme |
 | **Extras** | SQLite database, plugin system, scheduled scans, scan diffing, interactive mode |
+
+---
+
+## What's New in v10
+
+v10 evolves TheN0thing from a passive-collection pipeline into a full active-recon
+engine that aims to out-discover Subfinder/Amass by combining passive intel with
+smart active expansion, protocol abuse and optional AI prediction.
+
+### 1. Passive Reconnaissance (expanded)
+- **More sources:** VirusTotal, Shodan, Censys and AlienVault **OTX** join the
+  existing SecurityTrails/crt.sh/subfinder stack.
+- **Historical data:** the **Wayback Machine** CDX index is mined for hostnames
+  that no longer resolve but reveal old infrastructure.
+- **Email-security DNS:** **SPF / DKIM / DMARC / MX** records are parsed and any
+  referenced hosts (mail relays, SaaS senders, `include:` domains) are harvested.
+
+### 2. Active & Smart Enumeration
+- **Smart permutations:** an alterx/altdns-style engine learns from discovered
+  names — find `api-dev` and it tries `api-staging`, `api-test`, `admin-dev`, … —
+  then DNS-verifies the candidates.
+- **Recursive enumeration:** the top discovered subdomains are re-enumerated one
+  level deeper (e.g. `dev.example.com` → `api.dev.example.com`).
+- **VHost fuzzing** (`--vhost`): different `Host:` headers are sent to the target
+  IPs to reveal virtual hosts that don't resolve in DNS.
+
+### 3. Protocol Exploitation
+- **Zone transfer (AXFR):** every authoritative NS is tested automatically; a
+  successful transfer is dumped and flagged **HIGH**.
+- **DNSSEC zone-walking:** NSEC chains are walked to enumerate records; **NSEC3**
+  is detected and delegated to `ldns-walk` / `n3map` when installed.
+
+### 4. Cloud Infrastructure Targeting
+- **Bucket discovery:** common bucket names are generated from the target and
+  probed across **AWS S3 / GCP Storage / Azure Blob** (open vs. exists).
+- **CNAME-chain analysis:** chains are followed to expose third-party endpoints
+  and dangling-CNAME takeover candidates.
+
+### 5. AI / ML Prediction (optional)
+- `--ai [model]` asks a **local** LLM via [ollama](https://ollama.com) to predict
+  plausible subdomain labels from observed naming patterns, then DNS-verifies them.
+  Nothing leaves the host; the module no-ops cleanly if ollama isn't installed.
+
+### Engineering
+- **Wildcard-DNS detection** filters bogus results from brute-force/permutations.
+- **massdns → dig fallback** so resolution still works without a good resolver set.
+- All new modules respect existing concurrency, rate-limits, timeouts, scope files
+  and token handling.
+
+### New flags
+```
+--recursive          Recurse into discovered subdomains (3rd level)
+--vhost              Virtual-host fuzzing via Host header
+--ai [MODEL]         Local-LLM prediction (default model: llama3.2)
+--no-permute         Disable the permutation engine (on by default)
+--no-buckets         Disable cloud bucket discovery (on by default)
+--perm-limit N       Cap generated permutations (default 5000)
+```
+Env caps: `PERM_MAX`, `BUCKET_MAX`, `VHOST_MAX`, `RECURSE_TOP`, `RECURSE_DEPTH`, `AI_MODEL`.
+
+> Permutations, recursion, AXFR, zone-walking and bucket/VHost probing are **active**
+> techniques — they run in the active/extended phases and are skipped by `--fast`
+> and the `passive` profile. Wayback/OTX/VirusTotal/Shodan/Censys and SPF/DKIM/DMARC
+> harvesting are passive and always run.
 
 ---
 
@@ -191,12 +259,19 @@ OTHER OPTIONS:
 Phase 1: Passive Enumeration
     ├── subfinder, amass, assetfinder, findomain
     ├── crt.sh certificate transparency
-    ├── github-subdomains, chaos
-    ├── rapiddns
-    └── DNS resolution (massdns/dig)
+    ├── github-subdomains, chaos, rapiddns
+    ├── SecurityTrails, VirusTotal, Shodan, Censys, OTX   (v10)
+    ├── Wayback Machine historical hosts                  (v10)
+    ├── SPF / DKIM / DMARC / MX harvesting                (v10)
+    └── DNS resolution (massdns → dig fallback)
 
-Phase 2: Active Enumeration (skipped with -f)
-    └── puredns bruteforce
+Phase 2: Active Enumeration (skipped with -f / passive)
+    ├── puredns bruteforce
+    ├── wildcard-DNS detection (false-positive filter)    (v10)
+    ├── smart permutation engine + DNS verify             (v10)
+    ├── recursive enumeration (--recursive)               (v10)
+    ├── AXFR zone transfer + DNSSEC/NSEC zone-walk         (v10)
+    └── AI prediction (--ai, local LLM)                   (v10)
 
 Phase 3: Service Discovery
     ├── httpx fingerprinting
@@ -213,6 +288,9 @@ Phase 5: Extended Analysis (skipped with -f)
     ├── WAF detection (wafw00f)
     ├── Technology detection (webanalyze/whatweb)
     ├── nuclei vulnerability scanning
+    ├── cloud bucket discovery (S3/GCP/Azure)             (v10)
+    ├── CNAME-chain analysis                              (v10)
+    ├── VHost fuzzing (--vhost)                           (v10)
     └── Cloud asset detection
 
 Phase 6: Screenshots (with -s)
@@ -245,6 +323,12 @@ output/example.com/
 │   ├── nuclei_results.txt
 │   ├── subjack.txt
 │   ├── cloud_assets.txt
+│   ├── cloud_buckets.txt        # v10: S3/GCP/Azure findings
+│   ├── cname_chains.txt         # v10: CNAME chains
+│   ├── cname_thirdparty.txt     # v10: takeover candidates
+│   ├── email_records.txt        # v10: SPF/DKIM/DMARC
+│   ├── dnssec.txt               # v10: DNSSEC/NSEC status
+│   ├── vhosts.txt               # v10: virtual hosts (--vhost)
 │   ├── waf_results.txt
 │   └── dnsx.json
 ├── screenshots/
@@ -263,8 +347,11 @@ SHODAN_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 CENSYS_API_ID=xxxxxxxx-xxxx-xxxx-xxxx
 CENSYS_API_SECRET=xxxxxxxxxxxxxxxx
 SECURITYTRAILS_KEY=xxxxxxxxxxxxxxxx
+VT_API_KEY=xxxxxxxxxxxxxxxx
 SPYSE_API_TOKEN=xxxxxxxxxxxxxxxx
 ```
+> Keyless sources (Wayback, OTX, crt.sh, SPF/DKIM/DMARC, AXFR, zone-walk, bucket
+> discovery) work with no tokens at all. Keys only unlock VirusTotal, Shodan and Censys.
 ## Scope Files
 ### scope.txt
 ```
@@ -505,6 +592,66 @@ cat ~/.config/then0thing/logs/TheN0thing_*.log
 # Or clear cache manually
 rm -rf ~/.config/then0thing/cache/
 ```
+## Testing
+
+TheN0thing ships with a [bats](https://github.com/bats-core/bats-core) test-suite
+covering the v10 modules (passive sources, permutations, AXFR, DNSSEC, ENT logic,
+cloud buckets, vhost fuzzing, AI prediction) plus engineering helpers
+(`_ptimeout`, `_safe_jq`, flag parsing).
+
+### Layout
+```
+tests/
+├── test_helper.bash       # hermetic sandbox + PATH-based command stubs
+├── unit_tests.bats        # offline: pure logic + mocked curl/dig/ollama
+├── integration_tests.bats # live network, authorised targets only
+├── mock_data/             # canned API responses (crt.sh, wayback, OTX)
+└── run_tests.sh           # unified runner (JUnit + log report)
+```
+
+### Prerequisites
+```bash
+sudo apt-get install -y bats jq dnsutils curl     # Debian/Ubuntu
+# macOS:  brew install bats-core jq ; (dig ships with macOS)
+```
+
+### Run
+```bash
+./tests/run_tests.sh                    # unit + integration
+./tests/run_tests.sh --skip-integration # offline, deterministic, ~8s
+```
+Results are written to `tests/reports/report.xml` (JUnit) and
+`tests/reports/test_report.log`.
+
+### How it works
+- **Hermetic** — every test runs with `HOME`, `TMPDIR` and a stub-bin all under
+  the per-test BATS temp dir, so no config/log/cache/`temp_*` files ever touch
+  your system or the repo root.
+- **Mocked** — `curl`, `dig` and `ollama` are replaced with PATH-based stub
+  executables (so even `xargs sh -c` subprocesses use them), letting the mocked
+  suite finish offline in seconds. crt.sh/Wayback/OTX responses come from
+  `tests/mock_data/`.
+- **Resilient integration** — live tests only hit authorised hosts
+  (`zonetransfer.me`, `scanme.nmap.org`, plus read-only DNS/HTTP to
+  github.com/example.com/cloudflare.com) and `skip` (never fail) on outage.
+  Disable them entirely with `--skip-integration` or `SKIP_INTEGRATION=1`.
+
+> The suite sources `TheN0thing.sh`; the script only runs `main` / installs traps
+> when executed directly (`BASH_SOURCE`/`$0` guard), so sourcing loads the
+> functions without launching a scan.
+
+### Continuous Integration
+`.github/workflows/tests.yml` runs on every push / pull request:
+- **`unit`** job — installs `bats jq dnsutils curl`, runs `bash -n` lint and
+  `./tests/run_tests.sh --skip-integration`. This is the **required gate**
+  (fully deterministic, offline).
+- **`integration`** job — runs the full suite against the network with
+  `continue-on-error: true`, so a flaky third-party service is reported but never
+  breaks the build.
+
+Both jobs upload `tests/reports/` (JUnit XML) as a build artifact, so results
+render in the GitHub Actions “Checks” UI.
+
 ## Security Notes
 API tokens stored with 600 permissions <p>
 Tokens redacted from log files <p>
@@ -520,6 +667,14 @@ TheN0thing/
 ├── TheN0thing.sh          # Main script
 ├── README.md              # This file
 ├── LICENSE                 # MIT License
+├── .github/workflows/
+│   └── tests.yml          # CI: runs the bats suite on every push/PR
+├── tests/
+│   ├── test_helper.bash   # sandbox + command stubs
+│   ├── unit_tests.bats    # offline / mocked tests
+│   ├── integration_tests.bats
+│   ├── run_tests.sh       # test runner
+│   └── mock_data/         # canned API responses
 └── wordlist/
     ├── subdomains-top1million-5000.txt
     └── resolvers.txt

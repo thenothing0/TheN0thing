@@ -49,7 +49,7 @@ TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/${SCRIPT_NAME}.XXXXXXXX") || {
 [[ -d "$TEMP_DIR" && -w "$TEMP_DIR" ]] || { printf 'FATAL: temp\n' >&2; exit 1; }
 readonly TEMP_DIR
 
-readonly VERSION="9.0"
+readonly VERSION="10.0"
 readonly SCRIPT_PID=$$
 readonly START_TIME=$SECONDS
 readonly START_EPOCH=$(date +%s)
@@ -95,6 +95,22 @@ INTERACTIVE_MODE=false
 DB_EXPORT=false
 AUTO_UPDATE=false
 SECURITYTRAILS_KEY="${SECURITYTRAILS_KEY:-}"
+VT_API_KEY="${VT_API_KEY:-}"
+
+# ── v10 advanced module toggles & limits ──
+DO_PERMUTE=true          # smart permutation engine (alterx/altdns-style)
+DO_RECURSIVE=false       # recursive enumeration on discovered subdomains
+DO_VHOST=false           # virtual-host fuzzing via Host header
+DO_BUCKETS=true          # public cloud bucket discovery
+DO_AI=false              # local-LLM subdomain prediction (needs ollama)
+AI_MODEL="${AI_MODEL:-llama3.2}"
+PERM_MAX="${PERM_MAX:-5000}"     # cap on generated permutations
+BUCKET_MAX="${BUCKET_MAX:-400}"  # cap on probed bucket names
+VHOST_MAX="${VHOST_MAX:-2000}"   # cap on vhost candidates per IP
+RECURSE_TOP="${RECURSE_TOP:-10}" # seeds taken for recursive enumeration
+RECURSE_DEPTH="${RECURSE_DEPTH:-1}"
+ZONEWALK_MAX="${ZONEWALK_MAX:-500}" # max NSEC walk iterations (anti-black-lies)
+WAYBACK_MAXTIME="${WAYBACK_MAXTIME:-60}" # max seconds for the Wayback CDX query
 
 declare -rA LOG_LEVELS=(
     [DEBUG]=0 [INFO]=1 [SUCCESS]=2 [WARNING]=3 [ERROR]=4 [CRITICAL]=5
@@ -692,6 +708,7 @@ _load_token() {
         CENSYS_API_SECRET) CENSYS_API_SECRET="$v" ;;
         SPYSE_API_TOKEN) SPYSE_API_TOKEN="$v" ;;
         SECURITYTRAILS_KEY) SECURITYTRAILS_KEY="$v" ;;
+        VT_API_KEY|VIRUSTOTAL_KEY) VT_API_KEY="$v" ;;
         *) return 1 ;;
     esac
 }
@@ -744,6 +761,7 @@ C
 # CHAOS_KEY=
 # SHODAN_KEY=
 # SECURITYTRAILS_KEY=
+# VT_API_KEY=
 # CENSYS_API_ID=
 # CENSYS_API_SECRET=
 # GITLAB_TOKEN=
@@ -1477,8 +1495,12 @@ _cleanup() {
     [[ -d "${TEMP_DIR:-}" ]] && rm -rf "$TEMP_DIR" 2>/dev/null || true
     _CLEANED_UP=true; _CLEANING_UP=false
 }
-trap '_cleanup' EXIT
-trap 'trap "" INT TERM; log "WARNING" "Interrupted"; exit 130' INT TERM
+# Install signal/cleanup traps only when executed directly. When the script is
+# sourced (e.g. by the bats test-suite) we must not clobber the caller's traps.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    trap '_cleanup' EXIT
+    trap 'trap "" INT TERM; log "WARNING" "Interrupted"; exit 130' INT TERM
+fi
 
 readonly _SEP="__PSEP_a7f3b2e1__"
 
@@ -1913,6 +1935,580 @@ _asn_bgp() {
 }
 
 # ══════════════════════════════════════════
+# ADVANCED PASSIVE SOURCES (v10)
+# Each writes clean hostnames to raw/<name>.txt; proc_passive merges them.
+# ══════════════════════════════════════════
+
+# Wayback Machine / Internet Archive CDX (keyless)
+_en_wayback() {
+    local dom="$1" rd="$2"
+    validate_domain "$dom" || { : > "$rd/wayback.txt"; return 0; }
+    local t; t=$(_mktmp wb) || return 0
+    local enc; enc=$(_url_encode "*.$dom/*")
+    _ptimeout $(( WAYBACK_MAXTIME + 20 )) curl -fsS --max-filesize "$MAX_RESPONSE_SIZE" --max-time "$WAYBACK_MAXTIME" \
+        "http://web.archive.org/cdx/search/cdx?url=${enc}&output=text&fl=original&collapse=urlkey&limit=50000" \
+        > "$t" 2>/dev/null || true
+    if [[ -s "$t" ]]; then
+        grep -oiE 'https?://[a-z0-9._\-]+' "$t" 2>/dev/null | sed -E 's#^https?://##I' | \
+            tr 'A-Z' 'a-z' | sed 's/:.*//' | \
+            grep -E "(^|\.)$(_escape_ere "$dom")\$" | \
+            grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | \
+            sort -u > "$rd/wayback.txt" 2>/dev/null || : > "$rd/wayback.txt"
+        local c; c=$(_safe_count "$rd/wayback.txt"); (( c > 0 )) && log "SUCCESS" "[wayback] $c hosts"
+    else : > "$rd/wayback.txt"; fi
+    rm -f -- "$t"
+}
+
+# AlienVault OTX passive DNS (keyless)
+_en_otx() {
+    local dom="$1" rd="$2"
+    validate_domain "$dom" || { : > "$rd/otx.txt"; return 0; }
+    local t; t=$(_mktmp otx) || return 0
+    local enc; enc=$(_url_encode "$dom")
+    _ptimeout 60 curl -fsS --max-filesize "$MAX_RESPONSE_SIZE" --max-time 40 \
+        "https://otx.alienvault.com/api/v1/indicators/domain/${enc}/passive_dns" > "$t" 2>/dev/null || true
+    if [[ -s "$t" && "$(head -c 1 "$t" 2>/dev/null)" == "{" ]]; then
+        local p; p=$(_mktmp otxp) || true
+        [[ -n "$p" ]] && _safe_jq "$p" "$t" -r '.passive_dns[]?.hostname // empty' && [[ -s "$p" ]] && {
+            grep -E "(^|\.)$(_escape_ere "$dom")\$" "$p" | tr 'A-Z' 'a-z' | \
+                grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | sort -u > "$rd/otx.txt"
+            log "SUCCESS" "[otx] $(_safe_count "$rd/otx.txt") hosts"
+        }; rm -f -- "$p"
+    fi
+    [[ -f "$rd/otx.txt" ]] || : > "$rd/otx.txt"; rm -f -- "$t"
+}
+
+# VirusTotal API v3 (needs VT_API_KEY)
+_en_vt() {
+    [[ -z "${VT_API_KEY:-}" ]] && return 0
+    local dom="$1" rd="$2"
+    validate_domain "$dom" || { : > "$rd/virustotal.txt"; return 0; }
+    local tf; tf=$(_write_token_file "vt" "$VT_API_KEY") || return 0
+    local _tok; _tok=$(_read_token_file "$tf") || { rm -f "$tf"; return 0; }
+    local t; t=$(_mktmp vt) || { rm -f "$tf"; return 0; }
+    local enc; enc=$(_url_encode "$dom")
+    _ptimeout 60 curl -fsS --max-filesize "$MAX_RESPONSE_SIZE" --max-time 40 \
+        -H "x-apikey: ${_tok}" \
+        "https://www.virustotal.com/api/v3/domains/${enc}/subdomains?limit=40" > "$t" 2>/dev/null || true
+    rm -f "$tf"
+    if [[ -s "$t" && "$(head -c 1 "$t" 2>/dev/null)" == "{" ]]; then
+        local p; p=$(_mktmp vtp) || true
+        [[ -n "$p" ]] && _safe_jq "$p" "$t" -r '.data[]?.id // empty' && [[ -s "$p" ]] && {
+            grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' "$p" | tr 'A-Z' 'a-z' | \
+                sort -u > "$rd/virustotal.txt"
+            log "SUCCESS" "[virustotal] $(_safe_count "$rd/virustotal.txt") subdomains"
+        }; rm -f -- "$p"
+    fi
+    [[ -f "$rd/virustotal.txt" ]] || : > "$rd/virustotal.txt"; rm -f -- "$t"
+}
+
+# Shodan DNS database (needs SHODAN_KEY)
+_en_shodan() {
+    [[ -z "${SHODAN_KEY:-}" ]] && return 0
+    local dom="$1" rd="$2"
+    validate_domain "$dom" || { : > "$rd/shodan.txt"; return 0; }
+    local tf; tf=$(_write_token_file "shodan" "$SHODAN_KEY") || return 0
+    local _tok; _tok=$(_read_token_file "$tf") || { rm -f "$tf"; return 0; }
+    local t; t=$(_mktmp sho) || { rm -f "$tf"; return 0; }
+    local enc; enc=$(_url_encode "$dom"); local ke; ke=$(_url_encode "$_tok")
+    _ptimeout 60 curl -fsS --max-filesize "$MAX_RESPONSE_SIZE" --max-time 40 \
+        "https://api.shodan.io/dns/domain/${enc}?key=${ke}" > "$t" 2>/dev/null || true
+    rm -f "$tf"
+    if [[ -s "$t" && "$(head -c 1 "$t" 2>/dev/null)" == "{" ]]; then
+        local p; p=$(_mktmp shop) || true
+        [[ -n "$p" ]] && _safe_jq "$p" "$t" -r '.subdomains[]? // empty' && [[ -s "$p" ]] && {
+            sed "s/\$/.$dom/" "$p" | tr 'A-Z' 'a-z' | \
+                grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | sort -u > "$rd/shodan.txt"
+            log "SUCCESS" "[shodan] $(_safe_count "$rd/shodan.txt") subdomains"
+        }; rm -f -- "$p"
+    fi
+    [[ -f "$rd/shodan.txt" ]] || : > "$rd/shodan.txt"; rm -f -- "$t"
+}
+
+# Censys hosts search (needs CENSYS_API_ID + CENSYS_API_SECRET).
+# Resilient extraction: pull every string leaf and keep in-scope hostnames,
+# so it survives Censys API schema changes.
+_en_censys() {
+    [[ -z "${CENSYS_API_ID:-}" || -z "${CENSYS_API_SECRET:-}" ]] && return 0
+    local dom="$1" rd="$2"
+    validate_domain "$dom" || { : > "$rd/censys.txt"; return 0; }
+    local tf; tf=$(_write_token_file "censys" "${CENSYS_API_ID}:${CENSYS_API_SECRET}") || return 0
+    local _cred; _cred=$(_read_token_file "$tf") || { rm -f "$tf"; return 0; }
+    local t; t=$(_mktmp cen) || { rm -f "$tf"; return 0; }
+    local enc; enc=$(_url_encode "$dom")
+    _ptimeout 60 curl -fsS --max-filesize "$MAX_RESPONSE_SIZE" --max-time 40 \
+        -u "$_cred" \
+        "https://search.censys.io/api/v2/hosts/search?q=${enc}&per_page=100" > "$t" 2>/dev/null || true
+    rm -f "$tf"
+    if [[ -s "$t" && "$(head -c 1 "$t" 2>/dev/null)" == "{" ]]; then
+        local p; p=$(_mktmp cenp) || true
+        [[ -n "$p" ]] && _safe_jq "$p" "$t" -r '[..|strings] | .[]' && [[ -s "$p" ]] && {
+            grep -iE "(^|\.)$(_escape_ere "$dom")\$" "$p" | tr 'A-Z' 'a-z' | \
+                grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | sort -u > "$rd/censys.txt"
+            local c; c=$(_safe_count "$rd/censys.txt"); (( c > 0 )) && log "SUCCESS" "[censys] $c hosts"
+        }; rm -f -- "$p"
+    fi
+    [[ -f "$rd/censys.txt" ]] || : > "$rd/censys.txt"; rm -f -- "$t"
+}
+
+# Email-security DNS records: harvest hostnames from SPF/DKIM/DMARC/MX.
+# Clean hostnames -> raw/email_dns.txt (merged); raw records -> processed/email_records.txt.
+_en_email_dns() {
+    local dom="$1" rd="$2"; local od="${rd%/raw}"
+    command -v dig &>/dev/null || { : > "$rd/email_dns.txt"; return 0; }
+    validate_domain "$dom" || { : > "$rd/email_dns.txt"; return 0; }
+    local rec="$od/processed/email_records.txt"; : > "$rec"
+    local hosts; hosts=$(_mktmp edns) || return 0; : > "$hosts"
+    local spf; spf=$(_ptimeout 20 dig +short TXT "$dom" 2>/dev/null | tr -d '"' | grep -i 'v=spf1' | head -1)
+    [[ -n "$spf" ]] && {
+        printf 'SPF: %s\n' "$spf" >> "$rec"
+        grep -oiE '(include:|redirect=|exists:|a:|mx:|ptr:)[a-z0-9._-]+' <<< "$spf" | \
+            sed -E 's/^[a-z]+[:=]//I' | grep -E '\.' >> "$hosts" || true
+    }
+    local dmarc; dmarc=$(_ptimeout 20 dig +short TXT "_dmarc.$dom" 2>/dev/null | tr -d '"' | grep -i 'v=DMARC1' | head -1)
+    [[ -n "$dmarc" ]] && {
+        printf 'DMARC: %s\n' "$dmarc" >> "$rec"
+        grep -oiE 'mailto:[^,;! ]+' <<< "$dmarc" | sed 's/mailto://I' | awk -F@ 'NF>1{print $2}' | \
+            grep -E '\.' >> "$hosts" || true
+    }
+    local sel dk
+    for sel in default google selector1 selector2 k1 dkim mail smtp s1 s2 mandrill mailgun; do
+        dk=$(_ptimeout 10 dig +short TXT "${sel}._domainkey.$dom" 2>/dev/null | tr -d '"')
+        [[ -n "$dk" ]] && {
+            printf 'DKIM[%s]: present\n' "$sel" >> "$rec"
+            grep -oiE '(include:|d=|h=)[a-z0-9._-]+' <<< "$dk" | sed -E 's/^[a-z]+[:=]//I' | \
+                grep -E '\.' >> "$hosts" || true
+        }
+    done
+    _ptimeout 20 dig +short MX "$dom" 2>/dev/null | awk '{print $NF}' | sed 's/\.$//' | grep -E '\.' >> "$hosts" || true
+    grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' "$hosts" 2>/dev/null | tr 'A-Z' 'a-z' | \
+        sort -u > "$rd/email_dns.txt" 2>/dev/null || : > "$rd/email_dns.txt"
+    rm -f -- "$hosts"
+    [[ -s "$rec" ]] && log "DEBUG" "[email-dns] SPF/DKIM/DMARC records captured"
+}
+
+# ══════════════════════════════════════════
+# PROTOCOL EXPLOITATION (v10)
+# ══════════════════════════════════════════
+
+# Zone transfer (AXFR) attempt against every authoritative NS.
+_proto_axfr() {
+    local dom="$1" od="$2" rd="$od/raw"
+    command -v dig &>/dev/null || { : > "$rd/axfr.txt"; return 0; }
+    validate_domain "$dom" || { : > "$rd/axfr.txt"; return 0; }
+    : > "$rd/axfr.txt"
+    local ns_list; ns_list=$(_mktmp axns) || return 0
+    _ptimeout 30 dig +short NS "$dom" 2>/dev/null | sed 's/\.$//' > "$ns_list"
+    local got=0 ns dump in_lines
+    while IFS= read -r ns; do
+        [[ -z "$ns" ]] && continue
+        [[ "$ns" =~ ^[a-zA-Z0-9.\-]+$ ]] || continue
+        dump=$(_mktmp axdump) || continue
+        _ptimeout 30 dig AXFR "$dom" "@$ns" +time=10 +tries=1 2>/dev/null > "$dump"
+        in_lines=$(grep -ciE '[[:space:]]IN[[:space:]]' "$dump" 2>/dev/null) || in_lines=0
+        if (( in_lines >= 3 )) && ! grep -qiE 'transfer failed|communications error|connection refused|timed out' "$dump" 2>/dev/null; then
+            cp -- "$dump" "$od/processed/axfr_${ns//[^a-zA-Z0-9._-]/_}.txt" 2>/dev/null || true
+            awk '{print $1}' "$dump" | sed 's/\.$//' | tr 'A-Z' 'a-z' | \
+                grep -E "(^|\.)$(_escape_ere "$dom")\$" | \
+                grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' >> "$rd/axfr.txt" || true
+            got=1
+            log "SUCCESS" "[axfr] Zone transfer ALLOWED on $ns ($in_lines records)"
+            notify_finding "HIGH" "AXFR allowed: $dom @ $ns"
+        fi
+        rm -f -- "$dump"
+    done < "$ns_list"
+    rm -f -- "$ns_list"
+    _sort_inplace "$rd/axfr.txt"
+    (( got )) || log "DEBUG" "[axfr] refused on all nameservers"
+}
+
+# DNSSEC detection + NSEC zone walking (NSEC3 detected & delegated to tools).
+_proto_zonewalk() {
+    local dom="$1" od="$2" rd="$od/raw"
+    command -v dig &>/dev/null || { : > "$rd/zonewalk.txt"; return 0; }
+    validate_domain "$dom" || { : > "$rd/zonewalk.txt"; return 0; }
+    : > "$rd/zonewalk.txt"
+    local info="$od/processed/dnssec.txt"; : > "$info"
+    local dnskey; dnskey=$(_ptimeout 20 dig +short DNSKEY "$dom" 2>/dev/null)
+    if [[ -z "$dnskey" ]]; then
+        printf 'DNSSEC: not enabled on %s\n' "$dom" > "$info"
+        log "DEBUG" "[zonewalk] DNSSEC not enabled"; return 0
+    fi
+    printf 'DNSSEC: ENABLED on %s\n' "$dom" > "$info"
+    log "INFO" "[zonewalk] DNSSEC enabled on $dom"
+    if _ptimeout 20 dig +short NSEC3PARAM "$dom" 2>/dev/null | grep -q .; then
+        printf 'Type: NSEC3 (hashed) — online walking infeasible, needs offline cracking\n' >> "$info"
+        log "INFO" "[zonewalk] NSEC3 in use"
+        if command -v nsec3map &>/dev/null; then
+            _ptimeout 120 nsec3map "$dom" 2>/dev/null >> "$od/processed/nsec3.txt" || true
+        elif command -v ldns-walk &>/dev/null; then
+            _ptimeout 120 ldns-walk "$dom" 2>/dev/null >> "$od/processed/nsec_ldns.txt" || true
+        else
+            printf 'Hint: install ldns (ldns-walk) or n3map/nsec3map for NSEC3 enumeration\n' >> "$info"
+        fi
+        return 0
+    fi
+    printf 'Type: NSEC (plaintext) — walking zone\n' >> "$info"
+    local auth; auth=$(_ptimeout 20 dig +short NS "$dom" 2>/dev/null | sed 's/\.$//' | head -1)
+    [[ -z "$auth" ]] && return 0
+    # loop-detection guards against NSEC "black lies" (synthetic records, e.g. Cloudflare)
+    local cur="$dom" next guard=0 dpat; dpat=$(_escape_ere "$dom")
+    declare -A _seen=()
+    while (( guard < ZONEWALK_MAX )); do
+        ((guard++))
+        next=$(_ptimeout 15 dig NSEC "$cur" "@$auth" +noall +answer 2>/dev/null | awk '$4=="NSEC"{print $5; exit}' | sed 's/\.$//')
+        [[ -z "$next" || "$next" == "$cur" ]] && break
+        grep -qiE "(^|\.)${dpat}\$" <<< "$next" || break
+        [[ -n "${_seen[$next]:-}" ]] && break   # cycle / black-lies detected
+        _seen[$next]=1
+        printf '%s\n' "$next" >> "$rd/zonewalk.txt"
+        [[ "$next" == "$dom" ]] && break
+        cur="$next"
+    done
+    if [[ -s "$rd/zonewalk.txt" ]]; then
+        tr 'A-Z' 'a-z' < "$rd/zonewalk.txt" | grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | \
+            sort -u > "$rd/zonewalk.txt.s" && mv -- "$rd/zonewalk.txt.s" "$rd/zonewalk.txt"
+        local zc; zc=$(_safe_count "$rd/zonewalk.txt")
+        (( zc > 0 )) && { log "SUCCESS" "[zonewalk] NSEC walk recovered $zc names"; printf 'NSEC names: %s\n' "$zc" >> "$info"; }
+    fi
+}
+
+# ══════════════════════════════════════════
+# SMART ACTIVE ENUMERATION (v10)
+# ══════════════════════════════════════════
+
+# Wildcard DNS detection -> od/temp/wildcard_ips.txt (for false-positive filtering).
+detect_wildcard() {
+    local dom="$1" od="$2"
+    local wc="$od/temp/wildcard_ips.txt"; : > "$wc"
+    command -v dig &>/dev/null || return 1
+    local i r
+    for i in 1 2 3; do
+        r="wildcardtest-${RANDOM}${RANDOM}-${i}.${dom}"
+        _ptimeout 15 dig +short +time=3 +tries=1 A "$r" 2>/dev/null | \
+            grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' >> "$wc" || true
+    done
+    _sort_inplace "$wc"
+    if [[ -s "$wc" ]]; then
+        log "WARNING" "[wildcard] *.$dom resolves ($(_safe_count "$wc") IPs) — filtering bogus results"
+        notify_finding "INFO" "Wildcard DNS detected on $dom"
+        return 0
+    fi
+    log "DEBUG" "[wildcard] none detected on $dom"; return 1
+}
+
+# Resolve candidate hostnames; keep only those resolving to non-wildcard IPs.
+_resolve_batch_callback() {
+    local batch_file="$1" out="$2" wc_ips="$3" resolvers="$4"
+    [[ -f "$batch_file" ]] || return 1
+    [[ -f "$wc_ips" ]] || : > "$wc_ips"
+    local bo got=0; bo=$(_mktmp rcb) || return 1
+    if command -v massdns &>/dev/null && [[ -f "$resolvers" ]]; then
+        _ptimeout 300 massdns -r "$resolvers" -t A -o S -w "$bo" "$batch_file" 2>/dev/null || true
+        if [[ -s "$bo" ]]; then
+            awk '
+                NR==FNR{w[$1]=1;next}
+                {name=$1; sub(/\.$/,"",name)}
+                $2=="A" && !($3 in w){print name}
+                $2=="CNAME"{print name}' "$wc_ips" "$bo" | sort -u >> "$out"
+            got=1
+        fi
+    fi
+    # Fallback to dig if massdns is absent or produced nothing (e.g. bad resolvers)
+    if (( ! got )) && command -v dig &>/dev/null; then
+        grep -E '^[a-zA-Z0-9.\-]+$' "$batch_file" | \
+            _ptimeout 300 xargs -P 20 -I {} sh -c '
+                ips=$(dig +short +time=3 +tries=1 A "$1" 2>/dev/null | grep -oE "([0-9]{1,3}\.){3}[0-9]{1,3}")
+                [ -z "$ips" ] && exit 0
+                ok=0
+                for ip in $ips; do grep -qxF "$ip" "$2" 2>/dev/null || ok=1; done
+                [ "$ok" = 1 ] && printf "%s\n" "$1"
+            ' _ {} "$wc_ips" 2>/dev/null | sort -u >> "$out"
+    fi
+    rm -f -- "$bo"
+}
+
+_resolve_candidates() {
+    local cand="$1" od="$2" label="$3" out="$4"
+    : > "$out"
+    [[ -s "$cand" ]] || return 0
+    local wc="$od/temp/wildcard_ips.txt"; [[ -f "$wc" ]] || : > "$wc"
+    _run_batched "$cand" 50000 "$label" _resolve_batch_callback "$out" "$wc" "$RESOLVERS"
+    _sort_inplace "$out"
+}
+
+# Smart permutation engine (alterx/altdns-style) over discovered subdomains.
+gen_permutations() {
+    local dom="$1" od="$2"
+    local src="$od/assets/subdomains/all.txt"
+    [[ -s "$src" ]] || return 0
+    local base; base=$(_escape_ere "$dom")
+    local words; words=$(_mktmp pw) || return 0
+    sed -E "s/\.${base}\$//" "$src" 2>/dev/null | tr 'A-Z' 'a-z' | tr '._-' '\n' | \
+        grep -E '^[a-z0-9]{1,30}$' | sort | uniq -c | sort -rn | awk '{print $2}' | head -200 > "$words"
+    local cand; cand=$(_mktmp pc) || { rm -f "$words"; return 0; }
+    local tokens="dev development staging stage stg test testing qa uat prod production preprod sandbox demo beta alpha api api2 admin internal int corp app apps web portal gateway gw auth sso vpn mail smtp ftp git ci cd jenkins gitlab grafana kibana jira confluence backup bak old new v1 v2 v3 status monitor metrics"
+    {
+        # word x token combinations (prefix/suffix, dash and dot joins)
+        awk -v dom="$dom" -v toks="$tokens" '
+            BEGIN{n=split(toks,T," ")}
+            { w=$0
+              for(i=1;i<=n;i++){
+                  print T[i]"-"w"."dom; print w"-"T[i]"."dom
+                  print T[i]"."w"."dom; print w"."T[i]"."dom
+              } }' "$words"
+        # env-swap on full discovered names (altdns "replace" mode)
+        awk -v base="$dom" '
+            BEGIN{ne=split("dev staging stage stg test qa uat prod production preprod sandbox demo int internal beta",E," ")}
+            { full=$0
+              for(i=1;i<=ne;i++){
+                  if(index(full, E[i])>0){
+                      for(j=1;j<=ne;j++){ if(i!=j){ t=full; sub(E[i],E[j],t); print t } }
+                  }
+              } }' "$src"
+    } | tr 'A-Z' 'a-z' | grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | \
+        sort -u | head -n "$PERM_MAX" > "$cand"
+    rm -f "$words"
+    # drop names we already know
+    local cand2; cand2=$(_mktmp pc2) || { rm -f "$cand"; return 0; }
+    grep -vxF -f "$src" "$cand" > "$cand2" 2>/dev/null || cp -- "$cand" "$cand2"
+    rm -f "$cand"
+    local total; total=$(_safe_count "$cand2")
+    log "INFO" "[permute] generated $total candidates, resolving..."
+    local out="$od/temp/perms_resolved.txt"
+    _resolve_candidates "$cand2" "$od" "permute" "$out"
+    rm -f "$cand2"
+    if [[ -s "$out" ]]; then
+        cat "$out" >> "$src"; _sort_inplace "$src"
+        log "SUCCESS" "[permute] $(_safe_count "$out") new subdomains verified"
+        notify_finding "INFO" "Permutation found $(_safe_count "$out") new subdomains"
+    fi
+}
+
+# Recursive enumeration: expand the top discovered subdomains one level deeper.
+# Empty Non-Terminal (ENT) derivation: given a hostname and the base domain,
+# emit the intermediate ancestor FQDNs between the leftmost label and the base.
+# These nodes frequently have no records of their own yet exist in the tree.
+#   _ent_derive api.blog.dev.example.com example.com
+#     -> blog.dev.example.com
+#        dev.example.com
+_ent_derive() {
+    local host="$1" base="$2"
+    [[ -n "$host" && -n "$base" && "$host" != "$base" ]] || return 0
+    case "$host" in *".$base") ;; *) return 0 ;; esac
+    local cur="${host%.$base}"            # strip base -> e.g. api.blog.dev
+    while [[ "$cur" == *.* ]]; do
+        cur="${cur#*.}"                   # drop leftmost label -> blog.dev -> dev
+        printf '%s.%s\n' "$cur" "$base"
+    done
+}
+
+recursive_enum() {
+    local dom="$1" od="$2"
+    (( RECURSE_DEPTH > 0 )) || return 0
+    local src="$od/assets/subdomains/all.txt"
+    [[ -s "$src" ]] || return 0
+    local seeds; seeds=$(_mktmp rseed) || return 0
+    awk -F. 'NF>=3' "$src" | sort -u | head -n "$RECURSE_TOP" > "$seeds"
+    [[ -s "$seeds" ]] || { rm -f "$seeds"; return 0; }
+    local tokens="dev test staging api admin internal app web portal auth vpn mail git ci cd v1 v2 status monitor backup gateway"
+    local cand; cand=$(_mktmp rcand) || { rm -f "$seeds"; return 0; }
+    local seed tk crt enc
+    while IFS= read -r seed; do
+        [[ "$seed" =~ ^[a-zA-Z0-9.\-]+$ ]] || continue
+        for tk in $tokens; do printf '%s.%s\n' "$tk" "$seed"; done
+        _ent_derive "$seed" "$dom"   # probe empty-non-terminal ancestors too
+        # certificate transparency for the seed (cheap, high-signal)
+        enc=$(_url_encode "$seed")
+        crt=$(_mktmp rcrt) || continue
+        _ptimeout 30 curl -fsS --max-filesize "$MAX_RESPONSE_SIZE" --max-time 20 \
+            "https://crt.sh/?q=%25.${enc}&output=json" > "$crt" 2>/dev/null || true
+        [[ -s "$crt" && "$(head -c 1 "$crt" 2>/dev/null)" == "[" ]] && \
+            _safe_jq /dev/stdout "$crt" -r 'try .[].name_value catch empty' 2>/dev/null | \
+            sed 's/\*\.//g'
+        rm -f -- "$crt"
+    done < "$seeds" | tr 'A-Z' 'a-z' | \
+        grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | sort -u > "$cand"
+    rm -f "$seeds"
+    log "INFO" "[recursive] $(_safe_count "$cand") third-level candidates, resolving..."
+    local out="$od/temp/recursive_resolved.txt"
+    _resolve_candidates "$cand" "$od" "recursive" "$out"
+    rm -f "$cand"
+    if [[ -s "$out" ]]; then
+        cat "$out" >> "$src"; _sort_inplace "$src"
+        log "SUCCESS" "[recursive] $(_safe_count "$out") deeper subdomains verified"
+    fi
+}
+
+# Orchestrates wildcard detection + permutations + recursion + protocol + AI.
+advanced_active() {
+    local dom="$1" od="$2" tt="$3"
+    [[ "$tt" == domain ]] || return 0
+    log "INFO" "[active+] wildcard / permutation / protocol modules"
+    detect_wildcard "$dom" "$od" || true
+    [[ "$DO_PERMUTE" == true ]]   && { gen_permutations "$dom" "$od" || true; }
+    [[ "$DO_RECURSIVE" == true ]] && { recursive_enum "$dom" "$od"   || true; }
+    [[ "$DO_AI" == true ]]        && { ai_predict "$dom" "$od"       || true; }
+    _proto_axfr "$dom" "$od"
+    _proto_zonewalk "$dom" "$od"
+    # fold protocol-discovered hostnames into the subdomain asset list
+    local f
+    for f in "$od/raw/axfr.txt" "$od/raw/zonewalk.txt"; do
+        [[ -s "$f" ]] && cat "$f" >> "$od/assets/subdomains/all.txt"
+    done
+    _sort_inplace "$od/assets/subdomains/all.txt"
+    [[ -n "$SCOPE_FILE" || -n "$OOS_FILE" ]] && \
+        filter_scope "$od/assets/subdomains/all.txt" "$od/assets/subdomains/all.txt"
+}
+
+# ══════════════════════════════════════════
+# CLOUD INFRASTRUCTURE TARGETING (v10)
+# ══════════════════════════════════════════
+
+# Public cloud bucket discovery across AWS S3 / GCP Storage / Azure Blob.
+cloud_buckets() {
+    local od="$1" tgt="$2"
+    [[ "$DO_BUCKETS" == true ]] || return 0
+    command -v curl &>/dev/null || return 0
+    local out="$od/processed/cloud_buckets.txt"; : > "$out"
+    local base="${tgt%%.*}"
+    local names; names=$(_mktmp bkn) || return 0
+    {
+        printf '%s\n' "$base"
+        [[ -s "$od/assets/subdomains/all.txt" ]] && \
+            sed -E "s/\.$(_escape_ere "$tgt")\$//" "$od/assets/subdomains/all.txt" 2>/dev/null | \
+            tr 'A-Z' 'a-z' | tr '._-' '\n' | grep -E '^[a-z0-9]{3,40}$' | sort -u | head -50
+    } | sort -u > "$names"
+    local suffixes="@ -assets -backup -backups -static -media -dev -prod -staging -test -files -data -uploads -cdn -public -private -logs -archive -bucket -storage -web -app -images -img"
+    local cand; cand=$(_mktmp bkc) || { rm -f "$names"; return 0; }
+    local n s
+    while IFS= read -r n; do
+        [[ -z "$n" ]] && continue
+        for s in $suffixes; do
+            [[ "$s" == "@" ]] && s=""
+            printf '%s%s\n' "$n" "$s"
+            [[ -n "$s" ]] && printf '%s%s\n' "$n" "${s//-/.}"
+        done
+    done < "$names" | grep -E '^[a-z0-9][a-z0-9.\-]{2,62}$' | sort -u | head -n "$BUCKET_MAX" > "$cand"
+    rm -f "$names"
+    local total; total=$(_safe_count "$cand")
+    log "INFO" "[buckets] probing $total names (AWS S3 / GCP / Azure)"
+    # S3 uses path-style (https://s3.amazonaws.com/<bucket>/) so dotted bucket
+    # names don't trip the *.s3.amazonaws.com TLS wildcard. 301 = region redirect
+    # (bucket exists), 403 = exists/denied, 200 = publicly listable.
+    < "$cand" _ptimeout 900 xargs -P 20 -I {} sh -c '
+        name="$1"
+        c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 7 "https://s3.amazonaws.com/$name/" 2>/dev/null)
+        case "$c" in 200) echo "OPEN   s3    https://s3.amazonaws.com/$name/";; 301|403) echo "EXISTS s3    https://s3.amazonaws.com/$name/ ($c)";; esac
+        g=$(curl -s -o /dev/null -w "%{http_code}" --max-time 7 "https://storage.googleapis.com/$name/" 2>/dev/null)
+        case "$g" in 200) echo "OPEN   gcp   https://storage.googleapis.com/$name/";; 401|403) echo "EXISTS gcp   https://storage.googleapis.com/$name/ ($g)";; esac
+        a=$(curl -s -o /dev/null -w "%{http_code}" --max-time 7 "https://$name.blob.core.windows.net/?comp=list" 2>/dev/null)
+        case "$a" in 200) echo "OPEN   azure https://$name.blob.core.windows.net/?comp=list";; 400|403) echo "EXISTS azure https://$name.blob.core.windows.net/ ($a)";; esac
+    ' _ {} >> "$out" 2>/dev/null || true
+    rm -f "$cand"
+    _sort_inplace "$out"
+    local found openc
+    found=$(_safe_count "$out"); openc=$(grep -c '^OPEN' "$out" 2>/dev/null) || openc=0
+    (( found > 0 )) && {
+        log "SUCCESS" "[buckets] $found buckets ($openc publicly readable)"
+        (( openc > 0 )) && notify_finding "HIGH" "$openc open cloud buckets for $tgt"
+    }
+}
+
+# CNAME chain analysis -> reveal third-party endpoints / takeover candidates.
+cname_chains() {
+    local od="$1"
+    command -v dig &>/dev/null || return 0
+    local src="$od/assets/subdomains/all.txt"
+    [[ -s "$src" ]] || return 0
+    local out="$od/processed/cname_chains.txt"; : > "$out"
+    head -n 2000 "$src" | _ptimeout 600 xargs -P 20 -I {} sh -c '
+        chain=$(dig +short CNAME "$1" 2>/dev/null | tr "\n" " " | sed "s/ *$//")
+        [ -z "$chain" ] && exit 0
+        printf "%s -> %s\n" "$1" "$chain"
+    ' _ {} >> "$out" 2>/dev/null || true
+    _sort_inplace "$out"
+    if [[ -s "$out" ]]; then
+        grep -iE 's3\.amazonaws|cloudfront|herokuapp|herokudns|github\.io|githubusercontent|netlify|vercel|azurewebsites|trafficmanager|cloudapp|wordpress\.com|pantheon|ghost\.io|surge\.sh|bitbucket\.io|fastly|zendesk|readme\.io|helpscout|statuspage|unbouncepages|wpengine|desk\.com|cargocollective|smugmug|aftership|helpjuice|tilda|wishpond|shopify|myshopify|firebaseapp|pages\.dev|workers\.dev' \
+            "$out" > "$od/processed/cname_thirdparty.txt" 2>/dev/null || true
+        log "SUCCESS" "[cname] $(_safe_count "$out") chains, $(_safe_count "$od/processed/cname_thirdparty.txt") third-party"
+    fi
+}
+
+# ══════════════════════════════════════════
+# VHOST FUZZING (v10)
+# ══════════════════════════════════════════
+
+# Discover virtual hosts by sending different Host headers to target IPs.
+vhost_fuzz() {
+    local od="$1" tgt="$2"
+    [[ "$DO_VHOST" == true ]] || return 0
+    command -v curl &>/dev/null || return 0
+    local names="$od/assets/subdomains/all.txt"
+    [[ -s "$names" ]] || return 0
+    local ips; ips=$(_mktmp vhip) || return 0
+    [[ -s "$od/assets/ips/all.txt" ]] && head -10 "$od/assets/ips/all.txt" | sort -u > "$ips"
+    [[ -s "$ips" ]] || { rm -f "$ips"; log "DEBUG" "[vhost] no target IPs"; return 0; }
+    local out="$od/processed/vhosts.txt"; : > "$out"
+    local ip base
+    while IFS= read -r ip; do
+        validate_ip "$ip" || continue
+        base=$(curl -s -o /dev/null -w '%{size_download}' --max-time 7 \
+            -H "Host: nonexistent-$RANDOM.invalid" "http://$ip/" 2>/dev/null) || base=""
+        head -n "$VHOST_MAX" "$names" | _ptimeout 300 xargs -P 15 -I {} sh -c '
+            ip="$1"; host="$2"; base="$3"
+            r=$(curl -s -o /dev/null -w "%{http_code} %{size_download}" --max-time 7 -H "Host: $host" "http://$ip/" 2>/dev/null)
+            code=${r%% *}; len=${r##* }
+            [ -z "$code" ] && exit 0
+            case "$code" in 200|301|302|401|403)
+                [ "$len" != "$base" ] && printf "%s\t%s\t%s\t%s\n" "$ip" "$host" "$code" "$len" ;;
+            esac
+        ' _ "$ip" {} "$base" >> "$out" 2>/dev/null || true
+    done < "$ips"
+    rm -f "$ips"
+    _sort_inplace "$out"
+    local c; c=$(_safe_count "$out"); (( c > 0 )) && log "SUCCESS" "[vhost] $c candidate virtual hosts"
+}
+
+# ══════════════════════════════════════════
+# AI / LLM PREDICTION (v10, optional, local-only)
+# ══════════════════════════════════════════
+
+# Use a LOCAL LLM (ollama) to predict plausible subdomain labels from observed
+# naming patterns, then DNS-verify them. No data leaves the host. No-ops if
+# ollama is not installed.
+ai_predict() {
+    local dom="$1" od="$2"
+    [[ "$DO_AI" == true ]] || return 0
+    if ! command -v ollama &>/dev/null; then
+        log "INFO" "[ai] ollama not installed — skipping (install ollama && ollama pull $AI_MODEL)"
+        return 0
+    fi
+    local src="$od/assets/subdomains/all.txt"
+    [[ -s "$src" ]] || return 0
+    local sample; sample=$(sed -E "s/\.$(_escape_ere "$dom")\$//" "$src" 2>/dev/null | \
+        grep -vE '\.' | sort -u | head -80 | paste -sd, -)
+    [[ -z "$sample" ]] && return 0
+    local prompt="You are a DNS reconnaissance assistant. Existing subdomain labels of ${dom}: ${sample}. Output 60 NEW plausible subdomain labels, one per line, lowercase, no domain suffix, no numbering, no commentary, following the same naming conventions."
+    local raw; raw=$(_mktmp aip) || return 0
+    _ptimeout 120 ollama run "$AI_MODEL" "$prompt" > "$raw" 2>/dev/null || {
+        log "WARNING" "[ai] ollama run failed"; rm -f "$raw"; return 0; }
+    local cand; cand=$(_mktmp aic) || { rm -f "$raw"; return 0; }
+    grep -oiE '^[a-z0-9][a-z0-9.-]{0,40}' "$raw" 2>/dev/null | tr 'A-Z' 'a-z' | grep -vE '\.' | \
+        sed "s/\$/.$dom/" | grep -E '^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?\.[a-z]{2,63}$' | sort -u > "$cand"
+    rm -f "$raw"
+    log "INFO" "[ai] $(_safe_count "$cand") LLM-predicted candidates, resolving..."
+    local out="$od/temp/ai_resolved.txt"
+    _resolve_candidates "$cand" "$od" "ai" "$out"
+    rm -f "$cand"
+    if [[ -s "$out" ]]; then
+        cat "$out" >> "$src"; _sort_inplace "$src"
+        log "SUCCESS" "[ai] $(_safe_count "$out") AI-predicted subdomains verified"
+        notify_finding "INFO" "AI predicted $(_safe_count "$out") new subdomains for $dom"
+    fi
+}
+
+# ══════════════════════════════════════════
 # PASSIVE PROCESSING
 # ══════════════════════════════════════════
 proc_passive() {
@@ -2021,7 +2617,13 @@ run_dom_enum() {
         _en_gh "$dom" "$rd" "$_SEP" \
         _en_ch "$dom" "$rd" "$_SEP" \
         _en_rd "$dom" "$rd" "$_SEP" \
-        _en_sectrails "$dom" "$rd"
+        _en_sectrails "$dom" "$rd" "$_SEP" \
+        _en_wayback "$dom" "$rd" "$_SEP" \
+        _en_otx "$dom" "$rd" "$_SEP" \
+        _en_vt "$dom" "$rd" "$_SEP" \
+        _en_shodan "$dom" "$rd" "$_SEP" \
+        _en_censys "$dom" "$rd" "$_SEP" \
+        _en_email_dns "$dom" "$rd"
 
     printf '%s\n' "$dom" "www.$dom" > "$rd/main.txt"
     _safe_cat_dir "$rd" ".txt" | sort -u > "$od/temp/all_raw.txt" || return 1
@@ -2668,6 +3270,27 @@ gen_report() {
     [[ -f "$od/raw/securitytrails_ips.txt" ]] && st_ips=$(_safe_count "$od/raw/securitytrails_ips.txt")
     [[ -f "$od/raw/securitytrails_assoc.txt" ]] && st_assoc=$(_safe_count "$od/raw/securitytrails_assoc.txt")
 
+    # ── v10 advanced module counts ──
+    local wb_c=0 otx_c=0 vt_c=0 axfr_c=0 zw_c=0 perm_c=0 rec_c=0 ai_c=0
+    local buck_c=0 buck_open=0 vhost_c=0 cname_c=0 cname_tp=0 wildcard=false dnssec="n/a"
+    [[ -f "$od/raw/wayback.txt" ]]      && wb_c=$(_safe_count "$od/raw/wayback.txt")
+    [[ -f "$od/raw/otx.txt" ]]          && otx_c=$(_safe_count "$od/raw/otx.txt")
+    [[ -f "$od/raw/virustotal.txt" ]]   && vt_c=$(_safe_count "$od/raw/virustotal.txt")
+    [[ -f "$od/raw/axfr.txt" ]]         && axfr_c=$(_safe_count "$od/raw/axfr.txt")
+    [[ -f "$od/raw/zonewalk.txt" ]]     && zw_c=$(_safe_count "$od/raw/zonewalk.txt")
+    [[ -f "$od/temp/perms_resolved.txt" ]]     && perm_c=$(_safe_count "$od/temp/perms_resolved.txt")
+    [[ -f "$od/temp/recursive_resolved.txt" ]] && rec_c=$(_safe_count "$od/temp/recursive_resolved.txt")
+    [[ -f "$od/temp/ai_resolved.txt" ]]        && ai_c=$(_safe_count "$od/temp/ai_resolved.txt")
+    [[ -f "$od/processed/cloud_buckets.txt" ]] && {
+        buck_c=$(_safe_count "$od/processed/cloud_buckets.txt")
+        buck_open=$(grep -c '^OPEN' "$od/processed/cloud_buckets.txt" 2>/dev/null) || buck_open=0
+    }
+    [[ -f "$od/processed/vhosts.txt" ]]        && vhost_c=$(_safe_count "$od/processed/vhosts.txt")
+    [[ -f "$od/processed/cname_chains.txt" ]]  && cname_c=$(_safe_count "$od/processed/cname_chains.txt")
+    [[ -f "$od/processed/cname_thirdparty.txt" ]] && cname_tp=$(_safe_count "$od/processed/cname_thirdparty.txt")
+    [[ -s "$od/temp/wildcard_ips.txt" ]] && wildcard=true
+    [[ -f "$od/processed/dnssec.txt" ]] && dnssec=$(head -1 "$od/processed/dnssec.txt" 2>/dev/null | sed 's/^DNSSEC: //')
+
     local jt je
     jt=$(_mktmp rj); je=$(_mktmp re)
     if [[ -n "$jt" && -n "$je" ]] && jq -n \
@@ -2678,8 +3301,14 @@ gen_report() {
         --argjson urls "$nu" --argjson ports "$np" --argjson vulns "$nv" \
         --argjson cloud "$cl" --argjson waf "$wf" --argjson tech "$tc" \
         --argjson st_subs "$st_subs" --argjson st_ips "$st_ips" --argjson st_assoc "$st_assoc" \
+        --argjson wb "$wb_c" --argjson otx "$otx_c" --argjson vt "$vt_c" \
+        --argjson axfr "$axfr_c" --argjson zw "$zw_c" --argjson perm "$perm_c" \
+        --argjson rec "$rec_c" --argjson ai "$ai_c" --argjson buck "$buck_c" \
+        --argjson buckopen "$buck_open" --argjson vhost "$vhost_c" \
+        --argjson cname "$cname_c" --argjson cnametp "$cname_tp" \
+        --arg wildcard "$wildcard" --arg dnssec "$dnssec" \
         --argjson errs "$ERROR_COUNT" --argjson warns "$WARNING_COUNT" --arg lf "$LOG_FILE" \
-        '{meta:{tool:$tool,version:$ver,timestamp:$ts,duration:$dur,target:$tgt,type:$tt},summary:{subdomains:$subs,ips:$ips,asns:$asns,cidrs:$cidrs,urls:$urls,ports:$ports,vulns:$vulns,cloud:$cloud,waf:$waf,tech:$tech},securitytrails:{subdomains:$st_subs,historical_ips:$st_ips,associated_domains:$st_assoc},health:{errors:$errs,warnings:$warns,log:$lf}}' \
+        '{meta:{tool:$tool,version:$ver,timestamp:$ts,duration:$dur,target:$tgt,type:$tt},summary:{subdomains:$subs,ips:$ips,asns:$asns,cidrs:$cidrs,urls:$urls,ports:$ports,vulns:$vulns,cloud:$cloud,waf:$waf,tech:$tech},securitytrails:{subdomains:$st_subs,historical_ips:$st_ips,associated_domains:$st_assoc},advanced:{wayback:$wb,otx:$otx,virustotal:$vt,axfr_records:$axfr,zonewalk:$zw,permutations:$perm,recursive:$rec,ai_predicted:$ai,buckets:$buck,buckets_open:$buckopen,vhosts:$vhost,cname_chains:$cname,cname_thirdparty:$cnametp,wildcard_dns:$wildcard,dnssec:$dnssec},health:{errors:$errs,warnings:$warns,log:$lf}}' \
         > "$jt" 2> "$je" && [[ -s "$jt" ]]; then
         mv -- "$jt" "$js"
     else
@@ -2713,6 +3342,23 @@ gen_report() {
 | ST Historical IPs | $st_ips |
 | ST Associated Domains | $st_assoc |
 
+## Advanced Modules (v10)
+| Module | Result |
+|--------|--------|
+| Wayback hosts | $wb_c |
+| OTX passive DNS | $otx_c |
+| VirusTotal | $vt_c |
+| Permutations verified | $perm_c |
+| Recursive (deeper) | $rec_c |
+| AI predicted | $ai_c |
+| AXFR records | $axfr_c |
+| NSEC zone-walk | $zw_c |
+| Cloud buckets (open) | $buck_c ($buck_open) |
+| Virtual hosts | $vhost_c |
+| CNAME chains (3rd-party) | $cname_c ($cname_tp) |
+| Wildcard DNS | $wildcard |
+| DNSSEC | $dnssec |
+
 MDEOF
     [[ -s "$od/assets/subdomains/all.txt" ]] && {
         printf '## Top Subdomains\n```\n' >> "$md"
@@ -2722,6 +3368,21 @@ MDEOF
     [[ -s "$od/raw/securitytrails_assoc.txt" ]] && {
         printf '## Associated Domains (SecurityTrails)\n```\n' >> "$md"
         head -20 -- "$od/raw/securitytrails_assoc.txt" >> "$md"
+        printf '```\n\n' >> "$md"
+    }
+    [[ "$buck_open" -gt 0 ]] && {
+        printf '## Open Cloud Buckets\n```\n' >> "$md"
+        grep '^OPEN' "$od/processed/cloud_buckets.txt" | head -20 >> "$md"
+        printf '```\n\n' >> "$md"
+    }
+    [[ "$axfr_c" -gt 0 ]] && {
+        printf '## Zone Transfer (AXFR) Hosts\n```\n' >> "$md"
+        head -20 -- "$od/raw/axfr.txt" >> "$md"
+        printf '```\n\n' >> "$md"
+    }
+    [[ "$cname_tp" -gt 0 ]] && {
+        printf '## Third-Party CNAME Endpoints (takeover candidates)\n```\n' >> "$md"
+        head -20 -- "$od/processed/cname_thirdparty.txt" >> "$md"
         printf '```\n\n' >> "$md"
     }
     printf 'Errors: %d | Warnings: %d\n---\n*TheN0thing v%s*\n' \
@@ -2957,6 +3618,7 @@ process_target() {
         if should_run_phase "$od" "$PH_ACTIVE"; then
             log "INFO" "P${PH_ACTIVE}: Active Enumeration"
             run_active "$tgt" "$od" "$wl" "$rs" "$tt"
+            advanced_active "$tgt" "$od" "$tt"
             run_plugins "post_active" "$od"
             save_checkpoint "$od" "$PH_ACTIVE"
             log "SUCCESS" "P${PH_ACTIVE} complete"
@@ -3000,6 +3662,9 @@ process_target() {
                     detect_waf "$od" "$_SEP" \
                     detect_tech "$od" "$_SEP" \
                     run_nuclei "$od" "$_SEP" \
+                    cloud_buckets "$od" "$tgt" "$_SEP" \
+                    cname_chains "$od" "$_SEP" \
+                    vhost_fuzz "$od" "$tgt" "$_SEP" \
                     detect_cloud "$od" "$tgt"
                 run_plugins "post_scan" "$od"
                 save_checkpoint "$od" "$PH_EXTENDED"
@@ -3183,9 +3848,19 @@ ${C_BOLD}USAGE${C_RESET}  $SCRIPT_NAME [OPTS] <target> | --file FILE | --interac
   --remove-schedule ID --config FILE --log-level LVL --no-cache --no-color
   --rate-limit NUM --resume DIR --diff OLD NEW --interactive --check-update --self-update
 
+${C_BOLD}ADVANCED MODULES (v10)${C_RESET}
+  --recursive          Recurse into discovered subdomains (3rd-level)
+  --vhost              Virtual-host fuzzing via Host header on target IPs
+  --ai [MODEL]         Local-LLM subdomain prediction (needs ollama; default: $AI_MODEL)
+  --no-permute         Disable smart permutation engine (on by default)
+  --no-buckets         Disable cloud bucket discovery (on by default)
+  --perm-limit N       Cap generated permutations (default: $PERM_MAX)
+  Always on: Wayback/OTX passive, SPF/DKIM/DMARC harvest, AXFR, DNSSEC/NSEC
+             zone-walk, wildcard-DNS filtering, CNAME-chain analysis.
+
 ${C_BOLD}API KEYS${C_RESET}
   Set in ~/.config/then0thing/api_tokens.conf or environment:
-  SECURITYTRAILS_KEY  GITHUB_TOKEN  CHAOS_KEY  SHODAN_KEY
+  SECURITYTRAILS_KEY  VT_API_KEY  GITHUB_TOKEN  CHAOS_KEY  SHODAN_KEY
   CENSYS_API_ID  CENSYS_API_SECRET  GITLAB_TOKEN  SPYSE_API_TOKEN
 
 ${C_BOLD}PROFILES${C_RESET}
@@ -3199,6 +3874,7 @@ ${C_BOLD}PROFILES${C_RESET}
 ${C_BOLD}EXAMPLES${C_RESET}
   $SCRIPT_NAME example.com
   $SCRIPT_NAME example.com --profile bounty -a -s --db
+  $SCRIPT_NAME example.com --profile bounty --recursive --vhost --ai
   $SCRIPT_NAME --file targets.txt --profile bounty --notify telegram --bot-token T --chat-id ID
   $SCRIPT_NAME --resume output/example.com -v
   $SCRIPT_NAME --interactive
@@ -3260,6 +3936,21 @@ parse_args() {
                 LOG_LEVEL="$2"; shift 2 ;;
             --no-cache) USE_CACHE=false; shift ;;
             --no-color) NOCOLOR=1; _setup_colors; shift ;;
+            --recursive)  DO_RECURSIVE=true; shift ;;
+            --vhost)      DO_VHOST=true; shift ;;
+            --no-permute) DO_PERMUTE=false; shift ;;
+            --no-buckets) DO_BUCKETS=false; shift ;;
+            --ai)
+                DO_AI=true
+                if [[ $# -ge 2 && "$2" != -* ]]; then
+                    [[ "$2" =~ ^[a-zA-Z0-9._:-]+$ ]] || { log "ERROR" "Invalid model: $2"; exit 1; }
+                    AI_MODEL="$2"; shift
+                fi
+                shift ;;
+            --perm-limit)
+                [[ $# -lt 2 ]] && { log "ERROR" "Missing value for $1"; exit 1; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log "ERROR" "Invalid perm-limit: $2"; exit 1; }
+                PERM_MAX=$(_clamp PL "$2" 1 200000); shift 2 ;;
             --profile)
                 [[ $# -lt 2 ]] && { log "ERROR" "Missing value for $1"; exit 1; }
                 SCAN_PROFILE="$2"; shift 2 ;;
@@ -3436,4 +4127,8 @@ main() {
     send_notification "Complete" "${elapsed}s E:$ERROR_COUNT W:$WARNING_COUNT"
 }
 
-main "$@"
+# Only run main when executed directly; when sourced (e.g. by the bats test
+# suite) the functions are loaded without launching a scan.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
