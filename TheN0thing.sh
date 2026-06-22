@@ -49,7 +49,7 @@ TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/${SCRIPT_NAME}.XXXXXXXX") || {
 [[ -d "$TEMP_DIR" && -w "$TEMP_DIR" ]] || { printf 'FATAL: temp\n' >&2; exit 1; }
 readonly TEMP_DIR
 
-readonly VERSION="10.0"
+readonly VERSION="10.1"
 readonly SCRIPT_PID=$$
 readonly START_TIME=$SECONDS
 readonly START_EPOCH=$(date +%s)
@@ -3013,27 +3013,47 @@ _screenshots_batch_callback() {
     local batch_file="$1" od="$2"
     [[ -f "$batch_file" ]] || return 1
     mkdir -p "$od/screenshots"
+    local errlog="$od/processed/screenshots.log"
     if command -v gowitness &>/dev/null; then
-        _ptimeout 900 gowitness scan file -f "$batch_file" \
-            --threads 10 --screenshot-path "$od/screenshots" 2>/dev/null || {
-            log "WARNING" "[screenshots] Batch timed out"
-        }
+        # Pin a locally-installed Chrome/Chromium. gowitness v3 otherwise tries to
+        # auto-download a browser, which fails silently in offline/locked-down/root
+        # environments — the usual reason "screenshots don't work". Errors are sent
+        # to a log (not /dev/null) so real failures are visible.
+        local c chrome=""
+        for c in chromium chromium-browser google-chrome google-chrome-stable chrome; do
+            command -v "$c" &>/dev/null && { chrome=$(command -v "$c"); break; }
+        done
+        local -a gw=(gowitness scan file -f "$batch_file" --threads 10
+                     --screenshot-path "$od/screenshots" --write-none --log-scan-errors)
+        [[ -n "$chrome" ]] && gw+=(--chrome-path "$chrome")
+        _ptimeout 900 "${gw[@]}" >> "$errlog" 2>&1 || \
+            log "WARNING" "[screenshots] gowitness errors — see $errlog"
     elif command -v aquatone &>/dev/null; then
         cat -- "$batch_file" | \
-            _ptimeout 900 aquatone -out "$od/screenshots" -silent 2>/dev/null || {
-            log "WARNING" "[screenshots] Batch timed out"
-        }
+            _ptimeout 900 aquatone -out "$od/screenshots" -silent >> "$errlog" 2>&1 || \
+            log "WARNING" "[screenshots] aquatone errors — see $errlog"
     fi
 }
 
 screenshots() {
     local od="$1"
-    [[ -s "$od/processed/all_urls.txt" ]] || return 0
-    command -v gowitness &>/dev/null || command -v aquatone &>/dev/null || return 0
-
+    if [[ ! -s "$od/processed/all_urls.txt" ]]; then
+        log "INFO" "[screenshots] no live URLs to capture (skipped)"; return 0
+    fi
+    if ! command -v gowitness &>/dev/null && ! command -v aquatone &>/dev/null; then
+        log "WARNING" "[screenshots] gowitness/aquatone not installed (skipped)"; return 0
+    fi
     mkdir -p "$od/screenshots"
     _run_batched "$od/processed/all_urls.txt" 200 "screenshots" \
         _screenshots_batch_callback "$od"
+    local n; n=$(find "$od/screenshots" -type f \
+        \( -iname '*.jpeg' -o -iname '*.jpg' -o -iname '*.png' \) 2>/dev/null | wc -l)
+    n="${n//[[:space:]]/}"; [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    if (( n > 0 )); then
+        log "SUCCESS" "[screenshots] captured $n image(s) -> $od/screenshots"
+    else
+        log "WARNING" "[screenshots] 0 images captured — see $od/processed/screenshots.log"
+    fi
 }
 
 # ══════════════════════════════════════════
@@ -3738,7 +3758,7 @@ interactive_mode() {
                     [threads]="$THREADS" [ports]="$_p"
                     [screenshots]="$_s" [fast]="$_f" [target_type]="$_tt"
                 )
-                process_target _iscan || true
+                process_target _iscan </dev/null || true   # keep tools off the prompt's stdin
                 unset _iscan 2>/dev/null || true
                 ;;
             sectrails)
@@ -4071,14 +4091,24 @@ main() {
 
     if [[ -n "$inf" ]]; then
         local inf_r; inf_r=$(_val_file "$inf" Input) || exit 1
-        local pd; pd=$(_val_opath "output/multi_$(date +%Y%m%d_%H%M%S)") || exit 1
+        # Honour -o in batch mode; otherwise default to output/multi_<timestamp>.
+        local pd
+        if [[ -n "$od" ]]; then
+            pd=$(_val_opath "$od") || exit 1
+        else
+            pd=$(_val_opath "output/multi_$(date +%Y%m%d_%H%M%S)") || exit 1
+        fi
         mkdir -p "$pd" 2>/dev/null || true
         local tot pr=0
         tot=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$inf_r" 2>/dev/null) || tot=0
         tot="${tot//[[:space:]]/}"; [[ "$tot" =~ ^[0-9]+$ ]] || tot=0
         (( tot > MAX_TARGETS )) && { log "ERROR" "$tot > $MAX_TARGETS limit"; exit 1; }
+        # NOTE: the target list is read on FD 3 (not stdin) and process_target is
+        # given its own </dev/null. Several recon tools (httpx, puredns, …) read
+        # from stdin; without this isolation the first target's scan would drain
+        # the rest of the file from FD 0 and only one domain would be processed.
         local ln
-        while IFS= read -r ln || [[ -n "$ln" ]]; do
+        while IFS= read -r ln <&3 || [[ -n "$ln" ]]; do
             [[ -z "$ln" || "$ln" =~ ^[[:space:]]*# ]] && continue
             local dfree; dfree=$(_get_disk_free_kb "$pd")
             (( dfree < 524288 )) && { log "CRITICAL" "Low disk space"; break; }
@@ -4096,11 +4126,11 @@ main() {
                 [threads]="$thr" [ports]="$pts"
                 [screenshots]="$ss" [fast]="$fast" [target_type]="$ct2"
             )
-            process_target _mscan || true
+            process_target _mscan </dev/null || true
             unset _mscan 2>/dev/null || true
             ((pr++))
             show_prog "$pr" "$tot" Targets
-        done < "$inf_r"
+        done 3< "$inf_r"
         gen_multi "$pd" "$inf_r"
         log "SUCCESS" "All targets -> $pd"
     else
@@ -4117,7 +4147,7 @@ main() {
             [threads]="$thr" [ports]="$pts"
             [screenshots]="$ss" [fast]="$fast" [target_type]="$tt"
         )
-        process_target _sscan || exit 1
+        process_target _sscan </dev/null || exit 1
         unset _sscan 2>/dev/null || true
     fi
     rotate_logs; _sync_counters

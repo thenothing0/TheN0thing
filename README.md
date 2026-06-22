@@ -1,10 +1,10 @@
 
-### Advanced Reconnaissance Framework v10.0
+### Advanced Reconnaissance Framework v10.1
 
 [![Bash](https://img.shields.io/badge/Bash-4.4%2B-green?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey)](/)
-[![Version](https://img.shields.io/badge/Version-10.0-red)](/)
+[![Version](https://img.shields.io/badge/Version-10.1-red)](/)
 
 **Automated reconnaissance pipeline — from target to report in one command.**
 
@@ -581,6 +581,14 @@ chmod +x TheN0thing.sh
 # Only httpx, jq, and curl are required
 # Everything else is optional
 ```
+### Multiple targets — only one domain scanned?
+The input-file flag is `--file`, NOT `-f` (which is `--fast`). A batch scan is:
+```
+./TheN0thing.sh --file targets.txt --profile bounty -o out_dir
+```
+`-o` is honoured in batch mode; without it results go to `output/multi_<timestamp>/`.
+(If an older build stopped after the first domain, that was the stdin-drain bug
+fixed in v10.1 — recon tools were consuming the target list.)
 ### Logs
 ```
 ls ~/.config/then0thing/logs/
