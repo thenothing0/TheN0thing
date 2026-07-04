@@ -26,17 +26,10 @@ GO111MODULE=on go install github.com/incogbyte/shosubgo@latest
 GO111MODULE=on go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 GO111MODULE=on go install -v github.com/tomnomnom/anew@latest
 GO111MODULE=on go install github.com/tomnomnom/unfurl@latest
+git clone https://github.com/blechschmidt/massdns.git && cd massdns && make && sudo make install
 GO111MODULE=on go install github.com/d3mondev/puredns/v2@latest
 GO111MODULE=on go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
 GO111MODULE=on go install github.com/projectdiscovery/asnmap/cmd/asnmap@latest 
-GO111MODULE=on go install github.com/rapiddns/rapiddns-cli@latest
-GO111MODULE=on go install -v github.com/rverton/webanalyze/cmd/webanalyze@latest
-wget https://github.com/michenriksen/aquatone/releases/download/v1.7.0/aquatone_linux_amd64_1.7.0.zip
-unzip aquatone_linux_amd64_1.7.0.zip
-sudo mv aquatone /usr/local/bin/
-
-
-git clone https://github.com/blechschmidt/massdns.git && cd massdns && make && sudo make install
 
 #Installing Sublist3r
 pip3 install git+https://github.com/aboul3la/Sublist3r.git

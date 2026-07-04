@@ -1,0 +1,8 @@
+http://www.example.com/
+http://www.example.com/index.html
+https://api.example.com/v1/users
+https://blog.example.com/2021/post
+http://shop.example.com/cart
+https://cdn.example.com/assets/app.js
+http://example.com/robots.txt
+https://not-the-target.org/should-be-filtered

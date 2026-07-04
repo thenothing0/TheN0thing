@@ -1,0 +1,9 @@
+{
+  "passive_dns": [
+    {"hostname": "www.example.com", "address": "93.184.216.34"},
+    {"hostname": "vpn.example.com", "address": "93.184.216.35"},
+    {"hostname": "legacy.example.com", "address": "93.184.216.36"},
+    {"hostname": "unrelated.attacker.net", "address": "10.0.0.1"}
+  ],
+  "count": 4
+}

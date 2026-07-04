@@ -1,0 +1,28 @@
+# TheN0thing API-discovery ruleset  (probe_paths format)
+# <severity> <category> <codes> <title_underscored> <path> [body_regex...]
+#
+# ── Swagger / OpenAPI UIs ──
+medium api 200 Swagger_UI /swagger-ui.html (swagger-ui|Swagger UI)
+medium api 200 Swagger_UI_index /swagger-ui/index.html (swagger-ui|Swagger UI)
+medium api 200 Swagger_UI_api /api/swagger-ui.html (swagger-ui|Swagger UI)
+medium api 200 Swagger_UI_docs /swagger/index.html (swagger-ui|Swagger UI)
+# ── OpenAPI / Swagger specs (JSON/YAML) ──
+high api 200 OpenAPI_v3_spec /v3/api-docs ("openapi":[[:space:]]*"3|"paths")
+high api 200 OpenAPI_v2_spec /v2/api-docs ("swagger":[[:space:]]*"2|"paths")
+high api 200 OpenAPI_json /openapi.json ("openapi"|"swagger"|"paths")
+high api 200 OpenAPI_json_api /api/openapi.json ("openapi"|"swagger"|"paths")
+high api 200 Swagger_json /swagger.json ("swagger"|"paths"|"definitions")
+high api 200 Swagger_json_v1 /api/v1/swagger.json ("swagger"|"paths")
+medium api 200 OpenAPI_yaml /openapi.yaml (openapi:|swagger:|paths:)
+medium api 200 API_docs_index /api-docs ("swagger"|"openapi"|swagger-ui)
+# ── GraphQL ──
+medium api 200,400 GraphQL_endpoint /graphql (__schema|"errors"|"data"|Must provide query)
+medium api 200,400 GraphQL_api /api/graphql (__schema|"errors"|"data")
+medium api 200,400 GraphQL_v1 /v1/graphql (__schema|"errors"|"data")
+medium api 200 GraphiQL_UI /graphiql (graphiql|GraphiQL)
+medium api 200 GraphQL_Playground /playground (playground|GraphQL Playground)
+medium api 200 GraphQL_console /graphql/console (console|graphql)
+# ── Other API surfaces ──
+low api 200 WADL_present /application.wadl (application|resources|wadl)
+low api 200 SOAP_WSDL /?wsdl (wsdl:definitions|WSDL)
+info api 200 API_root_hint /api ("version"|"endpoints"|api)

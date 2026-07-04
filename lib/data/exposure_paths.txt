@@ -1,0 +1,49 @@
+# TheN0thing exposure ruleset  (probe_paths format)
+# <severity> <category> <codes> <title_underscored> <path> [body_regex...]
+# Body regex confirms a true positive (kills soft-404s). Omit only when a
+# status code alone is meaningful.
+#
+# ── VCS metadata ──
+critical exposure 200 Git_config_exposed /.git/config \[core\]|repositoryformatversion
+high exposure 200 Git_HEAD_exposed /.git/HEAD ^ref:[[:space:]]|refs/heads
+medium exposure 200 Git_index_exposed /.git/index DIRC
+high exposure 200 SVN_entries_exposed /.svn/entries ^[0-9]+$|dir
+high exposure 200 Mercurial_exposed /.hg/requires revlogv1|dotencode
+high exposure 200 Bazaar_exposed /.bzr/README control directory
+# ── Environment / secret files ──
+critical exposure 200 Dotenv_exposed /.env (APP_|DB_|AWS_|SECRET|API_?KEY|PASSWORD|TOKEN)[A-Z_]*=
+critical exposure 200 Dotenv_prod_exposed /.env.production (APP_|DB_|AWS_|SECRET|API_?KEY|PASSWORD)[A-Z_]*=
+critical exposure 200 Dotenv_local_exposed /.env.local (APP_|DB_|SECRET|API_?KEY|PASSWORD)[A-Z_]*=
+critical exposure 200 AWS_credentials_exposed /.aws/credentials aws_access_key_id|aws_secret_access_key
+critical exposure 200 NPM_rc_exposed /.npmrc _authToken|//registry
+critical exposure 200 Docker_cfg_exposed /.dockercfg auth|https://index.docker.io
+high exposure 200 WP_config_backup /wp-config.php.bak DB_PASSWORD|DB_NAME
+high exposure 200 Config_php_backup /config.php.bak (password|passwd|db_pass)
+# ── Server info / debug ──
+high exposure 200 PHPInfo_exposed /phpinfo.php phpinfo\(\)|PHP Version
+high exposure 200 Info_php_exposed /info.php phpinfo\(\)|PHP Version
+medium exposure 200 Apache_server_status /server-status Apache Server Status
+medium exposure 200 Apache_server_info /server-info Apache Server Information
+low exposure 200 DS_Store_exposed /.DS_Store Bud1|\x00\x00\x00
+low exposure 200 Crossdomain_wildcard /crossdomain.xml allow-access-from domain="\*"
+# ── Spring Boot Actuator ──
+medium exposure 200 Actuator_index /actuator (_links|"self")
+critical exposure 200 Actuator_env /actuator/env propertySources|activeProfiles
+high exposure 200 Actuator_health /actuator/health "status":[[:space:]]*"UP"
+high exposure 200 Actuator_mappings /actuator/mappings handlerMethod|dispatcherServlet
+critical exposure 200 Actuator_heapdump /actuator/heapdump JAVA PROFILE|HPROF
+high exposure 200 Actuator_configprops /actuator/configprops contexts|beans
+# ── CI/app admin consoles ──
+high exposure 200 Jenkins_script_console /script (Groovy|System\.getProperty|Jenkins)
+high exposure 200,401 Tomcat_manager /manager/html (Tomcat|Application Manager|status code)
+high exposure 200 Elasticsearch_open /_cluster/health cluster_name|"status":"(green|yellow|red)"
+high exposure 200 Elasticsearch_cat /_cat/indices health|status|index
+medium exposure 200 GraphQL_present /graphql (__schema|"data"|"errors")
+# ── Backups / dumps ──
+high exposure 200 SQL_dump_exposed /dump.sql (INSERT INTO|CREATE TABLE)
+high exposure 200 Backup_zip_exposed /backup.zip PK
+high exposure 200 DB_backup_exposed /database.sql (INSERT INTO|CREATE TABLE)
+# ── Informational ──
+info exposure 200 Security_txt_present /.well-known/security.txt (Contact:|Policy:)
+info exposure 200 Robots_txt /robots.txt (User-agent|Disallow)
+info exposure 200 Well_known_openid /.well-known/openid-configuration (issuer|authorization_endpoint)

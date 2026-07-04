@@ -1,0 +1,35 @@
+# TheN0thing vendor / edge-device / container / CI-CD exposure ruleset
+# <severity> <category> <codes> <title_underscored> <path> [body_regex...]
+#
+# ── Edge / VPN / mail appliances (exposed admin/VPN surface) ──
+medium vendor 200 Exchange_OWA /owa/ (outlook|Exchange|owa/auth)
+medium vendor 200 Exchange_ECP /ecp/ (Exchange|ecp/|Microsoft)
+low vendor 200 Exchange_Autodiscover /autodiscover/autodiscover.xml (Autodiscover|Response|Error)
+medium vendor 200 Citrix_Gateway /vpn/index.html (Citrix|NetScaler|_ctxstxt)
+medium vendor 200 Citrix_logon /citrix/ (Citrix|StoreFront|Receiver)
+medium vendor 200 F5_BIGIP_TMUI /tmui/login.jsp (BIG-IP|F5 Networks|tmui)
+medium vendor 200 FortiGate_SSLVPN /remote/login (fortinet|forticlient|sslvpn)
+medium vendor 200 PulseSecure_VPN /dana-na/auth/url_default/welcome.cgi (Pulse|dana-na|Secure Access)
+medium vendor 200 PaloAlto_GlobalProtect /global-protect/login.esp (GlobalProtect|Palo Alto|gp-portal)
+medium vendor 200 Cisco_ASA_WebVPN /+CSCOE+/logon.html (SSL VPN|Cisco|webvpn)
+medium vendor 200 SonicWall_SSLVPN /auth.html (SonicWall|sslvpn)
+medium vendor 200 VMware_vCenter /ui/ (vSphere|vCenter|VMware)
+medium vendor 200 VMware_Horizon /portal/webclient/ (Horizon|VMware|Blast)
+# ── Kubernetes / container infra ──
+high vendor 200 Kubernetes_API /version (gitVersion|major|minor|kubernetes)
+high vendor 200,401,403 Kubernetes_apis /apis ("kind":"APIGroupList"|"groups"|Unauthorized)
+critical vendor 200 Docker_registry_catalog /v2/_catalog ("repositories")
+high vendor 200,401 Docker_registry_root /v2/ (\{\}|Docker-Distribution|Unauthorized)
+high vendor 200 Docker_API_images /images/json (Id|RepoTags|Created)
+high vendor 200 etcd_open /v2/keys ("action"|"node")
+# ── CI/CD & dev platforms ──
+medium vendor 200 GitLab_signin /users/sign_in (GitLab|gitlab)
+low vendor 200 GitLab_explore /explore (GitLab|Explore projects)
+medium vendor 200 TeamCity_login /login.html (TeamCity|JetBrains)
+medium vendor 200 SonarQube_status /api/system/status ("status"|"version"|SonarQube)
+medium vendor 200 ArgoCD_api /api/v1/applications (metadata|items|argocd)
+medium vendor 200 Grafana_login /login (Grafana|grafana)
+high vendor 200 Kibana_status /api/status ("status"|"metrics"|kibana)
+high vendor 200 Consul_ui /v1/catalog/services (\{|consul)
+high vendor 200 Vault_health /v1/sys/health ("initialized"|"sealed"|vault)
+medium vendor 200 Prometheus_ui /graph (Prometheus|prometheus)

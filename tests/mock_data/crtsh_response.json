@@ -1,0 +1,7 @@
+[
+  {"issuer_ca_id": 1, "name_value": "example.com\nwww.example.com"},
+  {"issuer_ca_id": 1, "name_value": "api.example.com"},
+  {"issuer_ca_id": 1, "name_value": "*.dev.example.com"},
+  {"issuer_ca_id": 1, "name_value": "mail.example.com"},
+  {"issuer_ca_id": 1, "name_value": "staging.api.example.com"}
+]

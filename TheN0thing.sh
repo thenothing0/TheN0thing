@@ -49,7 +49,7 @@ TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/${SCRIPT_NAME}.XXXXXXXX") || {
 [[ -d "$TEMP_DIR" && -w "$TEMP_DIR" ]] || { printf 'FATAL: temp\n' >&2; exit 1; }
 readonly TEMP_DIR
 
-readonly VERSION="10.1"
+readonly VERSION="11.0"
 readonly SCRIPT_PID=$$
 readonly START_TIME=$SECONDS
 readonly START_EPOCH=$(date +%s)
@@ -103,6 +103,7 @@ DO_RECURSIVE=false       # recursive enumeration on discovered subdomains
 DO_VHOST=false           # virtual-host fuzzing via Host header
 DO_BUCKETS=true          # public cloud bucket discovery
 DO_AI=false              # local-LLM subdomain prediction (needs ollama)
+DO_ANALYSIS=true         # Findings Engine analysis phase (exposure/secrets/tls/…)
 AI_MODEL="${AI_MODEL:-llama3.2}"
 PERM_MAX="${PERM_MAX:-5000}"     # cap on generated permutations
 BUCKET_MAX="${BUCKET_MAX:-400}"  # cap on probed bucket names
@@ -3615,7 +3616,7 @@ process_target() {
 
     # مشكلة 19: phase counter ثابت بغض النظر عن fast mode
     # كل phase عندها رقم ثابت مش بيتغير
-    local -r PH_PASSIVE=1 PH_ACTIVE=2 PH_SERVICES=3 PH_DEEP=4 PH_EXTENDED=5 PH_SCREENSHOTS=6 PH_REPORTS=7
+    local -r PH_PASSIVE=1 PH_ACTIVE=2 PH_SERVICES=3 PH_DEEP=4 PH_EXTENDED=5 PH_SCREENSHOTS=6 PH_ANALYSIS=7 PH_REPORTS=8
 
     # Phase 1: Passive
     if should_run_phase "$od" "$PH_PASSIVE"; then
@@ -3703,7 +3704,20 @@ process_target() {
         }
     fi
 
-    # Phase 7: Reports (دايماً بيشتغل)
+    # Phase 7: Analysis (Findings Engine) — Discovery→Analysis→Findings→Prioritization
+    if [[ "$DO_ANALYSIS" == true && "$fast" != true && "$fast" != passive ]] \
+        && declare -F run_analysis >/dev/null 2>&1; then
+        if should_run_phase "$od" "$PH_ANALYSIS"; then
+            log "INFO" "P${PH_ANALYSIS}: Analysis (Findings Engine)"
+            run_analysis "$od" "$tgt" "$tt"
+            save_checkpoint "$od" "$PH_ANALYSIS"
+            log "SUCCESS" "P${PH_ANALYSIS} complete"
+        else
+            log "INFO" "P${PH_ANALYSIS}: Skipped (resume)"
+        fi
+    fi
+
+    # Phase 8: Reports (دايماً بيشتغل)
     log "INFO" "P${PH_REPORTS}: Reports"
     _sync_counters
     analyze "$od"
@@ -3878,6 +3892,15 @@ ${C_BOLD}ADVANCED MODULES (v10)${C_RESET}
   Always on: Wayback/OTX passive, SPF/DKIM/DMARC harvest, AXFR, DNSSEC/NSEC
              zone-walk, wildcard-DNS filtering, CNAME-chain analysis.
 
+${C_BOLD}ATTACK-SURFACE ANALYSIS (v11 — Findings Engine)${C_RESET}
+  Runs after discovery (full scans; skipped by -f / --profile passive):
+  exposure(.git/.env/actuator) · secrets · JS analysis · API/GraphQL · content
+  brute · identity(Entra/Okta/ADFS) · vuln-prio(EPSS/KEV) · origin discovery ·
+  TLS audit · Wayback intel · email posture. Deduped, severity-ranked output:
+  reports/findings.{html,md,json}  ·  findings/{findings.json,stats.json}
+  --no-analysis        Disable the analysis phase
+  CONTENT_WORDLIST=…   Enable ffuf-based content brute-force
+
 ${C_BOLD}API KEYS${C_RESET}
   Set in ~/.config/then0thing/api_tokens.conf or environment:
   SECURITYTRAILS_KEY  VT_API_KEY  GITHUB_TOKEN  CHAOS_KEY  SHODAN_KEY
@@ -3960,6 +3983,7 @@ parse_args() {
             --vhost)      DO_VHOST=true; shift ;;
             --no-permute) DO_PERMUTE=false; shift ;;
             --no-buckets) DO_BUCKETS=false; shift ;;
+            --no-analysis) DO_ANALYSIS=false; shift ;;
             --ai)
                 DO_AI=true
                 if [[ $# -ge 2 && "$2" != -* ]]; then
@@ -4156,6 +4180,19 @@ main() {
     log "SUCCESS" "Completed in ${elapsed}s | E:$ERROR_COUNT W:$WARNING_COUNT"
     send_notification "Complete" "${elapsed}s E:$ERROR_COUNT W:$WARNING_COUNT"
 }
+
+# ── Modular attack-surface platform (Findings Engine + analysis modules) ──
+# Loaded from lib/. Backward compatible: if lib/ is absent the tool runs exactly
+# as before (the analysis phase self-guards on run_analysis being defined).
+TN_LIB_DIR="${SCRIPT_DIR}/lib"
+if [[ -d "$TN_LIB_DIR" ]]; then
+    for _tn_lib in "$TN_LIB_DIR/findings/engine.sh" "$TN_LIB_DIR/core/probe.sh" \
+                   "$TN_LIB_DIR"/modules/*.sh "$TN_LIB_DIR/analysis.sh" \
+                   "$TN_LIB_DIR/report/render.sh"; do
+        [[ -f "$_tn_lib" ]] && source "$_tn_lib"
+    done
+    unset _tn_lib
+fi
 
 # Only run main when executed directly; when sourced (e.g. by the bats test
 # suite) the functions are loaded without launching a scan.

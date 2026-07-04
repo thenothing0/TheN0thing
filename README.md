@@ -1,10 +1,10 @@
 
-### Advanced Reconnaissance Framework v10.1
+### Advanced Reconnaissance Framework v11.0
 
 [![Bash](https://img.shields.io/badge/Bash-4.4%2B-green?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey)](/)
-[![Version](https://img.shields.io/badge/Version-10.1-red)](/)
+[![Version](https://img.shields.io/badge/Version-11.0-red)](/)
 
 **Automated reconnaissance pipeline — from target to report in one command.**
 
@@ -37,6 +37,72 @@
 | **Cloud Detection** | AWS S3 / Azure Blob / GCP bucket discovery, CNAME-chain analysis, CloudFront, Heroku, Netlify, Vercel |
 | **Reporting** | Markdown, JSON, HTML with dark theme |
 | **Extras** | SQLite database, plugin system, scheduled scans, scan diffing, interactive mode |
+
+---
+
+## What's New in v11 — Attack-Surface Platform
+
+v11 evolves TheN0thing from asset-enumeration into a full **external
+attack-surface assessment platform**. Discovery still runs exactly as before,
+then a new **Analysis phase** turns raw output into deduplicated,
+severity-ranked **findings**:
+
+```
+Discovery ─▶ Analysis ─▶ Findings ─▶ Prioritization ─▶ Reporting
+```
+
+A modular `lib/` layer (see [`lib/README.md`](lib/README.md)) adds a central
+**Findings Engine** and one module per capability, all emitting structured JSON:
+
+| Module | What it finds |
+|--------|---------------|
+| **exposure** | `.git` / `.env` / actuator / Jenkins / Tomcat / Elasticsearch / phpinfo / `.DS_Store` … (body-confirmed) |
+| **secrets** | 30-pattern credential catalog over HTML + crawled JS (redacted evidence) |
+| **jsanalysis** | source-map disclosure, internal-host leakage, sensitive endpoints |
+| **apidiscovery** | Swagger/OpenAPI/GraphQL + GraphQL field-suggestion leak |
+| **contentbrute** | curated path discovery (+ optional `ffuf` with `CONTENT_WORDLIST`) |
+| **identity** | Entra/M365, Okta, ADFS, Google Workspace, SAML/OIDC |
+| **vulnprio** | nuclei → **EPSS + CISA KEV** enrichment → prioritized queue (KEV ⇒ critical) |
+| **origin** | CDN/WAF origin discovery via DNS history + direct-IP Host probe |
+| **tls** | cert expiry, self-signed, weak keys (algorithm-aware), legacy TLS 1.0/1.1 |
+| **wayback** | historical URLs/params/JS + archived sensitive files still live |
+| **emailsec** | SPF / DMARC / DKIM / MTA-STS / BIMI / DNSSEC posture findings |
+| **normalize** | folds existing outputs (open buckets, takeovers, AXFR, vhosts) into findings |
+
+**Tier-2 modules:**
+
+| Module | What it finds |
+|--------|---------------|
+| **vendor** | exposed Exchange/Citrix/F5/Fortinet/Pulse/PaloAlto/Cisco/VMware + Kubernetes/Docker-registry/Vault/Consul/Grafana/Kibana |
+| **gfpatterns** | applies your `gf` templates (`~/.gf`, or `GF_PATH`) across the URL corpus → sqli/ssrf/lfi/rce/redirect/idor candidates |
+| **firebase** | open Firebase Realtime Databases (`/.json` readable without auth) |
+| **netintel** | reverse-DNS expansion + IPv6 (AAAA) discovery |
+| **breach** | HudsonRock infostealer/breach correlation (keyless) — exposed employee/user credentials |
+| **pkgintel** | npm/PyPI dependency-confusion (unclaimed scoped packages) + typosquat |
+| **githubdork** | automated GitHub code-search dorks for leaked secrets/config (needs `GITHUB_TOKEN`) |
+| **postman** | public Postman workspaces leaking internal API endpoints / env secrets |
+| **mobile** | Play Store app discovery; APK backend-host + secret extraction (`apkleaks`/`apktool`) |
+
+Plus **detection-aware probing** (back-off on 429/503 rate-limit/WAF, `PROBE_DELAY` pacing).
+
+**Outputs** (per target):
+```
+findings/findings.json   deduped, severity-ranked findings
+findings/stats.json      totals, by-severity/category/asset, risk_score, risk_rating
+reports/findings.html    professional dark-theme, severity-ranked report
+reports/findings.md      Markdown report
+reports/findings.json    composed machine report (meta + stats + findings)
+```
+
+Each finding carries id, asset, category, title, description, severity,
+confidence, evidence, references, remediation, tags, detection method and
+timestamps. Duplicates across modules collapse (highest severity wins; evidence
+merges) and a 0–100 risk score is computed.
+
+Runs on full scans; disable with `--no-analysis` (auto-skipped by `-f` /
+`--profile passive`). Backward compatible — remove `lib/` and the tool reverts
+to pure discovery. Adding a capability = one `mod_<name>` file + one line in
+`lib/analysis.sh`.
 
 ---
 
