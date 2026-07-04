@@ -1,0 +1,61 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # ── Deterministic, offline, mocked suite — this is the gate ──────────────
+  unit:
+    name: Unit & mocked tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq dnsutils curl openssl
+
+      - name: Lint (bash -n) main script + lib modules
+        run: |
+          bash -n TheN0thing.sh
+          for f in lib/findings/*.sh lib/core/*.sh lib/analysis.sh lib/report/*.sh lib/modules/*.sh; do
+            [ -f "$f" ] && bash -n "$f"
+          done
+
+      - name: Run unit + attack-surface analysis tests (offline)
+        run: ./tests/run_tests.sh --skip-integration
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-report
+          path: tests/reports/
+
+  # ── Live network tests against authorised targets — informational ───────
+  # Resilient: each test `skip`s on outage, and the job is non-blocking so a
+  # flaky third-party service never breaks the build.
+  integration:
+    name: Integration tests (network)
+    runs-on: ubuntu-latest
+    needs: unit
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq dnsutils curl
+
+      - name: Run full suite (unit + integration)
+        run: ./tests/run_tests.sh
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-report
+          path: tests/reports/
