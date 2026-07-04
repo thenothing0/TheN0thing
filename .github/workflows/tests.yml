@@ -25,7 +25,7 @@ jobs:
           done
 
       - name: Run unit + attack-surface analysis tests (offline)
-        run: ./tests/run_tests.sh --skip-integration
+        run: bash tests/run_tests.sh --skip-integration
 
       - name: Upload JUnit report
         if: always()
@@ -51,7 +51,7 @@ jobs:
           sudo apt-get install -y bats jq dnsutils curl
 
       - name: Run full suite (unit + integration)
-        run: ./tests/run_tests.sh
+        run: bash tests/run_tests.sh
 
       - name: Upload JUnit report
         if: always()
